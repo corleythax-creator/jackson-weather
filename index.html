@@ -1,0 +1,1533 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Daily weather, 2026</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --paper:#16212A; --ink:#E6EDEC; --ink-soft:#8CA0A6; --rule:#2E3E48;
+    --hot:#E8713C; --cold:#5FAAD2; --rain:#4FA5A8; --soil:#B79A63;
+    --solar:#D9A441; --uv:#C77DBA;
+    --normal:rgba(190,214,220,.13); --normal-edge:#6E8894; --today:#7FC29B;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--paper);color:var(--ink);
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:40px 32px 56px;-webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    font-weight:600;font-size:clamp(26px,5.2vw,46px);line-height:1.08;
+    letter-spacing:-.015em;margin:0 0 14px;max-width:18ch;
+  }
+  .standfirst{max-width:64ch;color:var(--ink-soft);margin:0 0 26px;font-size:16.5px}
+  .standfirst b{color:var(--ink);font-weight:600}
+
+  .search{position:relative;max-width:420px;margin:0 0 12px}
+  input[type=search]{
+    width:100%;font:inherit;font-size:16px;color:var(--ink);background:rgba(255,255,255,.05);
+    border:1px solid var(--rule);border-radius:2px;padding:10px 12px;
+  }
+  input[type=search]:focus{outline:none;border-color:var(--ink-soft)}
+  input[type=search]::placeholder{color:var(--ink-soft)}
+  .results{
+    position:absolute;z-index:5;left:0;right:0;top:calc(100% + 4px);
+    background:#1C2A34;border:1px solid var(--rule);border-radius:2px;
+    max-height:280px;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,.4);
+  }
+  .results div{padding:11px 12px;cursor:pointer;font-size:15px;border-bottom:1px solid var(--rule)}
+  .results div:last-child{border-bottom:none}
+  .results div:hover{background:rgba(255,255,255,.07)}
+  .results .where{color:var(--ink-soft);font-size:13px}
+  .results .none{cursor:default;color:var(--ink-soft)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px;min-height:32px}
+  .chip{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;
+    border:1px solid var(--rule);border-radius:2px;padding:5px 6px 5px 10px}
+  .chip .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .chip button{border:none;padding:0 6px;font-size:17px;line-height:1;color:var(--ink-soft);background:none}
+  .chip button:hover{color:var(--ink);background:none}
+  .chip.busy{opacity:.55}
+
+  figure{margin:0}
+  svg{display:block;width:100%;height:auto;overflow:visible;touch-action:pan-y}
+  #hit{cursor:crosshair}
+  text{fill:var(--ink-soft);font-size:12px}
+  .panellabel{fill:var(--ink-soft);font-size:12.5px}
+  .gridline{stroke:var(--rule);stroke-width:1}
+  .monthrule{stroke:var(--rule);stroke-width:1;stroke-dasharray:2 4}
+  .todayline{stroke:var(--today);stroke-width:1.3;opacity:.9}
+  .todaylab{fill:var(--today);font-size:11px}
+  .normalband{fill:var(--normal)}
+  .normaledge{fill:none;stroke:var(--normal-edge);stroke-width:1;stroke-dasharray:3 3;opacity:.85}
+  .normalrain,.normalsolar{fill:none;stroke:var(--normal-edge);stroke-width:1;stroke-dasharray:3 3;opacity:.9}
+  .meanline{fill:none;stroke:var(--ink);stroke-width:1.5;stroke-linejoin:round}
+  .hi{fill:none;stroke:var(--hot);stroke-width:1.2;opacity:.88;stroke-linejoin:round}
+  .lo{fill:none;stroke:var(--cold);stroke-width:1.2;opacity:.88;stroke-linejoin:round}
+  .cityline{fill:none;stroke-width:1.8;stroke-linejoin:round}
+  .soilline{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+  .soilfill{stroke:none;opacity:.3}
+  .midline{stroke:var(--ink-soft);stroke-width:1;opacity:.45;stroke-dasharray:2 4}
+  .apiline{fill:none;stroke:var(--rain);stroke-width:1.5;stroke-dasharray:6 3;opacity:.85}
+  .solarfill{fill:var(--solar);stroke:none;opacity:.18}
+  .solarline{fill:none;stroke:var(--solar);stroke-width:1.6;stroke-linejoin:round}
+  .uvline{fill:none;stroke:var(--uv);stroke-width:1.6;stroke-linejoin:round}
+  .fc{stroke-dasharray:5 4;opacity:.62}
+  .bar{fill:var(--rain)}
+  .bar.fcbar{fill:none;stroke:var(--rain);stroke-width:1.1;opacity:.75}
+  .hover-rule{stroke:var(--ink);stroke-width:1.6;opacity:.95}
+  /* paint-order gives the label a knockout halo, so it stays readable where it
+     crosses a line or the normal band. */
+  .dlabel{font-size:11px;font-variant-numeric:tabular-nums;
+    paint-order:stroke;stroke:var(--paper);stroke-width:3px;stroke-linejoin:round}
+  .dlabel.hotlab{fill:var(--hot)}
+  .dlabel.coldlab{fill:var(--cold)}
+  .dlabel.wetlab{fill:var(--rain);font-size:10.5px}
+  .dnode{font-variant-numeric:tabular-nums;font-weight:600}
+  .brush{fill:rgba(230,237,236,.13);stroke:var(--ink);stroke-width:1}
+
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 0}
+  .controls .sep{flex:1}
+  .grp{display:inline-flex;gap:0;border:1px solid var(--rule);border-radius:2px;overflow:hidden}
+  .grp button{border:none;border-right:1px solid var(--rule);border-radius:0}
+  .grp button:last-child{border-right:none}
+  .grp button:hover{border-color:var(--rule);background:rgba(255,255,255,.06)}
+  .grp button[aria-pressed="true"]:hover{background:var(--ink)}
+  button{
+    font:inherit;font-size:13.5px;background:none;color:var(--ink);
+    border:1px solid var(--rule);padding:7px 13px;border-radius:2px;cursor:pointer;
+  }
+  button:hover{border-color:var(--ink)}
+  button[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  button:disabled{opacity:.4;cursor:default}
+  button:disabled:hover{border-color:var(--rule)}
+  button:focus-visible{outline:2px solid var(--hot);outline-offset:-2px}
+  select{
+    font:inherit;font-size:13.5px;color:var(--ink);background:#1C2A34;
+    border:1px solid var(--rule);border-radius:2px;padding:7px 10px;cursor:pointer;
+    color-scheme:dark;
+  }
+  select:hover{border-color:var(--ink)}
+  select:focus-visible{outline:2px solid var(--hot);outline-offset:-2px}
+  /* The native popup is a separate surface — it needs its own colours, or the light
+     text inherits onto a white list and vanishes. */
+  select option{background:#1C2A34;color:#E6EDEC}
+  select option:checked{background:#2E3E48}
+
+  .tabs{display:flex;gap:6px;margin:0 0 16px;border-bottom:1px solid var(--rule)}
+  .tabs button{
+    border:none;border-bottom:2px solid transparent;border-radius:0;
+    padding:8px 2px;margin-right:18px;color:var(--ink-soft);background:none;
+  }
+  .tabs button:hover{color:var(--ink);border-color:var(--rule)}
+  .tabs button[aria-pressed="true"]{
+    background:none;color:var(--ink);border-bottom-color:var(--hot);
+  }
+  #soilbtn[aria-pressed="true"]{background:var(--soil);border-color:var(--soil);color:#141B14}
+  #solarbtn[aria-pressed="true"]{background:var(--solar);border-color:var(--solar);color:#1B1706}
+
+  .panelpick{display:none;gap:6px;margin:0 0 12px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .panelpick button{flex:none}
+
+  .key{display:flex;flex-wrap:wrap;gap:14px 20px;font-size:13px;color:var(--ink-soft);margin:18px 0 4px}
+  .key i{display:inline-block;width:15px;height:2px;vertical-align:middle;margin-right:7px}
+  .key i.swatch{height:11px;background:var(--normal);border-top:1px dashed var(--normal-edge);border-bottom:1px dashed var(--normal-edge)}
+  .key i.block{height:11px;background:var(--rain)}
+  .key i.dashed{height:0;border-top:2px dashed var(--ink-soft);background:none}
+  .key i.grad{height:10px;width:56px;border-radius:1px;
+    background:linear-gradient(90deg,#C2542B,#C89A55,#8E9C93,#4E9FAA,#3B8AC4)}
+
+  .readout{padding:0 0 14px;margin-bottom:14px;border-bottom:1px solid var(--rule);min-height:62px}
+  .readout .line{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:baseline}
+  .readout .line + .line{margin-top:6px}
+  .readout .date{font-family:"Iowan Old Style",Palatino,Georgia,serif;font-size:19px}
+  .readout .who{font-size:14px;min-width:150px}
+  .readout .tag{font-size:12px;color:var(--paper);background:var(--ink-soft);padding:2px 7px;border-radius:2px}
+  .readout .span{font-size:12.5px;color:var(--ink-soft)}
+  .readout .stat{font-size:14px;color:var(--ink-soft)}
+  .readout .stat b{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat.max b{color:var(--hot)}
+  .stat.min b{color:var(--cold)}
+  .stat.wet b{color:var(--rain)}
+  .stat.dirt b{color:var(--soil)}
+
+  .stats{margin-top:22px;padding-top:16px;border-top:1px solid var(--rule);font-size:13.5px}
+  .stats h2{font:inherit;font-weight:600;font-size:14px;margin:0 0 4px;color:var(--ink)}
+  .stats .lede{color:var(--ink-soft);margin:0 0 14px;max-width:70ch}
+  .stats .lede b{color:var(--ink)}
+  .scroller{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .stats table{border-collapse:collapse;width:100%;min-width:560px;max-width:760px}
+  .stats th,.stats td{text-align:right;padding:5px 6px;font-variant-numeric:tabular-nums}
+  .stats th:first-child,.stats td:first-child{text-align:left;color:var(--ink-soft);min-width:180px}
+  .stats thead th{color:var(--ink-soft);font-weight:400;border-bottom:1px solid var(--rule)}
+  .stats td .cell{display:block;padding:2px 5px;border-radius:2px}
+  .stats td.best .cell{outline:1px solid var(--ink-soft)}
+  .stats .foot{color:var(--ink-soft);margin:12px 0 0;max-width:70ch;font-size:13px}
+
+  footer{margin-top:30px;padding-top:16px;border-top:1px solid var(--rule);
+    font-size:13px;color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  .msg{padding:20px 0;color:var(--ink-soft);max-width:62ch}
+  .msg b{color:var(--ink)}
+  code{font-size:13px;background:rgba(255,255,255,.09);padding:1px 5px;border-radius:2px}
+  .hint{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0}
+  @media (prefers-reduced-motion:no-preference){.pending{opacity:.55;transition:opacity .4s}}
+
+  @media (max-width:720px){
+    body{padding:22px 14px 40px}
+    .standfirst{font-size:15.5px;margin-bottom:20px}
+    .panelpick{display:flex}
+    .desktop-only{display:none !important}
+    .readout .date{font-size:18px}
+    .readout .stat b{font-size:17px}
+    .key{font-size:12.5px;gap:10px 16px}
+    footer{font-size:12.5px}
+  }
+</style>
+
+<div class="wrap">
+  <h1 id="head">Daily weather, 2026</h1>
+  <p class="standfirst" id="stand">Loading&hellip;</p>
+
+  <div class="search">
+    <input type="search" id="q" placeholder="Search a city — Memphis, Denver, Lisbon…"
+           autocomplete="off" aria-label="Search for a city">
+    <div class="results" id="results" hidden></div>
+  </div>
+  <div class="chips" id="chips"></div>
+
+  <div id="state" class="msg"></div>
+
+  <figure id="fig" hidden>
+    <div class="tabs" id="tabs" role="tablist">
+      <button data-mode="chart" aria-pressed="true">Timeline</button>
+      <button data-mode="hot" aria-pressed="false">Hot days</button>
+    </div>
+    <div class="panelpick" id="panelpick" role="tablist" aria-label="Choose a panel"></div>
+    <div class="readout" id="readout"><span class="stat">Hover or touch the chart to read a period.</span></div>
+    <svg id="chart" viewBox="0 0 1000 512" role="img" aria-labelledby="head"></svg>
+    <div class="key" id="key"></div>
+    <div class="controls">
+      <select id="yearpick" aria-label="Year"></select>
+      <span id="hotctl" hidden>
+        <label for="thresh" style="color:var(--ink-soft);font-size:13.5px;margin-right:6px">Days at or above</label>
+        <select id="thresh" aria-label="Temperature threshold"></select>
+      </span>
+      <span class="grp" id="granpick" role="group" aria-label="Aggregation" hidden>
+        <button data-gran="day" aria-pressed="true">Day</button>
+        <button data-gran="week" aria-pressed="false">Week</button>
+        <button data-gran="month" aria-pressed="false">Month</button>
+      </span>
+      <button data-days="0" aria-pressed="true">Everything</button>
+      <button data-days="90">90 days</button>
+      <button data-days="30">30 days</button>
+      <button data-days="7">Week</button>
+      <button data-days="-1">Forecast</button>
+      <span class="sep"></span>
+      <button id="soilbtn" class="desktop-only" aria-pressed="false">Soil moisture</button>
+      <button id="solarbtn" class="desktop-only" aria-pressed="false">Solar &amp; UV</button>
+      <button id="out">Zoom out</button>
+    </div>
+    <p class="hint" id="hint2"></p>
+    <div class="stats" id="stats" hidden></div>
+  </figure>
+
+  <footer>
+    <span id="src"></span>
+    <button id="dl" hidden>Download CSV</button>
+  </footer>
+</div>
+
+<script>
+const FC_DAYS=16, MAX_CITIES=5, YEAR_MIN=2000;
+const CLIM_FROM=2001, CLIM_TO=2025, SMOOTH=7;
+const SOIL_BAND="soil_moisture_7_to_28cm", SOIL_FROM=2016, SOIL_TO=2025, SOIL_WIN=7;
+const SOIL_STOPS=[[0,"#C2542B"],[30,"#C89A55"],[50,"#8E9C93"],[70,"#4E9FAA"],[100,"#3B8AC4"]];
+const DECAYS=[0.80,0.85,0.90,0.93,0.95,0.97];
+const PALETTE=["#E8713C","#5FAAD2","#7FC29B","#D9A441","#C77DBA"];
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS_FULL=["January","February","March","April","May","June","July","August",
+                   "September","October","November","December"];
+const wetWord=p=>p<10?"very dry":p<30?"dry":p<70?"normal":p<90?"wet":"saturated";
+
+const iso=d=>[d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");
+const NOW=iso(new Date()), CUR_YEAR=+NOW.slice(0,4);
+const bucketCache={};
+
+// Everything downstream is keyed off these; changing year rebuilds them.
+// OBS_END is the last observed day — today for the current year, 31 Dec for a past one.
+let year=CUR_YEAR, IS_CURRENT=true;
+let START="", HORIZON="", OBS_END="", DATES=[], TODAY_IDX=0, DATE_POS=new Map();
+function setYear(y){
+  year=y; IS_CURRENT=(y===CUR_YEAR);
+  START=`${y}-01-01`;
+  if(IS_CURRENT){ const d=new Date(); d.setDate(d.getDate()+FC_DAYS); HORIZON=iso(d); }
+  else HORIZON=`${y}-12-31`;
+  DATES=[];
+  for(const d=new Date(START+"T12:00:00"); iso(d)<=HORIZON; d.setDate(d.getDate()+1)) DATES.push(iso(d));
+  TODAY_IDX=IS_CURRENT?Math.max(0,DATES.indexOf(NOW)):DATES.length-1;
+  OBS_END=DATES[TODAY_IDX];
+  DATE_POS=new Map(DATES.map((t,i)=>[t,i]));
+  Object.keys(bucketCache).forEach(k=>delete bucketCache[k]);
+  // Open on the last week plus the forecast — the stretch you actually care about.
+  // On a phone that's 23 points crammed into 338 units, so narrow it to 7 days there.
+  if(IS_CURRENT){
+    if(isMobile()){
+      view={a:Math.max(0,TODAY_IDX-1),b:Math.min(DATES.length-1,TODAY_IDX+5)};
+      preset=-99;                       // a custom window, so no preset button lights up
+    }else{
+      view={a:Math.max(0,TODAY_IDX-6),b:DATES.length-1}; preset=7;
+    }
+  }
+  else { view={a:0,b:DATES.length-1}; preset=0; }
+  document.title=`Daily weather, ${y}`;
+  $("head").textContent=`Daily weather, ${y}`;
+}
+
+const units="&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto";
+const varsA="&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,shortwave_radiation_sum";
+const varsF=varsA+",uv_index_max,precipitation_probability_max";
+const archBase="https://archive-api.open-meteo.com/v1/archive";
+
+let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
+let soilOn=false, solarOn=false, activePanel="temp", gran="day";
+let mode="chart", thresh=100, selDate=null;
+const HOT_CHOICES=[85,90,95,100,105,110];
+
+const $=id=>document.getElementById(id);
+const mq=window.matchMedia("(max-width:720px)");
+const isMobile=()=>mq.matches;
+async function grab(u){const r=await fetch(u);if(!r.ok)throw new Error(`${r.status} from ${new URL(u).hostname}`);return r.json();}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pretty=t=>{const [,m,d]=t.split("-"); return `${+d} ${MONTHS[+m-1]}`;};
+
+/* ---------- buckets: day / week / month ----------
+   Buckets are built over the whole date axis, then filtered to the view. That way a
+   month stays a whole month even when it's only half on screen — zooming never
+   silently changes what a bar sums.                                              */
+function weekStart(t){
+  const d=new Date(t+"T12:00:00");
+  d.setDate(d.getDate()-((d.getDay()+6)%7));   // back to Monday
+  return iso(d);
+}
+function buildBuckets(g){
+  if(bucketCache[g]) return bucketCache[g];
+  const out=[], byKey=new Map();
+  DATES.forEach((t,i)=>{
+    const key = g==="day"?t : g==="week"?weekStart(t) : t.slice(0,7);
+    let b=byKey.get(key);
+    if(!b){ b={key,idxs:[]}; byKey.set(key,b); out.push(b); }
+    b.idxs.push(i);
+  });
+  out.forEach(b=>{
+    b.first=DATES[b.idxs[0]]; b.last=DATES[b.idxs[b.idxs.length-1]];
+    b.allFc=b.first>OBS_END;
+    b.anyFc=b.last>OBS_END;
+    b.obs=b.idxs.filter(i=>i<=TODAY_IDX).length;
+    if(g==="day"){ b.label=pretty(b.first); b.long=pretty(b.first); }
+    else if(g==="week"){ b.label=pretty(b.first); b.long=`${+b.first.slice(8)}–${pretty(b.last)}`; }
+    else { const m=+b.key.slice(5)-1; b.label=MONTHS[m]; b.long=MONTHS_FULL[m]; }
+  });
+  bucketCache[g]=out;
+  return out;
+}
+
+// Aggregation rules: rainfall SUMS over the period, temperature AVERAGES the daily
+// highs and lows, solar stays a per-day mean so periods of different length compare.
+function aggCity(city,b){
+  let hi=0,lo=0,mn=0,n=0, rain=0,rn=0, solar=0,sn=0, uv=0,un=0, soil=0,so=0, api=0,an=0, cum=null, pop=null;
+  b.idxs.forEach(i=>{
+    const r=city.byDate.get(DATES[i]); if(!r) return;
+    hi+=r.hi; lo+=r.lo; mn+=r.mean; n++;
+    if(r.pr!=null){rain+=r.pr; rn++;}
+    if(r.cum!=null) cum=r.cum;                       // running total: last day wins
+    if(r.pop!=null) pop=Math.max(pop==null?0:pop,r.pop);   // wettest chance in period
+    if(r.solar!=null){solar+=r.solar; sn++;}
+    if(r.uv!=null){uv+=r.uv; un++;}
+    const sm=city.soil&&city.soil.get(DATES[i]); if(sm){soil+=sm.pct; so++;}
+    const ap=city.api&&city.api.pct.get(DATES[i]); if(ap!=null){api+=ap; an++;}
+  });
+  if(!n) return null;
+  return {n, hi:hi/n, lo:lo/n, mean:mn/n, rain:rn?rain:null, cum, pop,
+          solar:sn?solar/sn:null, uv:un?uv/un:null,
+          soilPct:so?soil/so:null, apiPct:an?api/an:null};
+}
+function aggClim(clim,b){
+  let hi=0,lo=0,n=0,pr=0,pn=0,sr=0,sn=0;
+  b.idxs.forEach(i=>{
+    const c=clim.get(DATES[i].slice(5)); if(!c) return;
+    hi+=c.hi; lo+=c.lo; n++;
+    if(c.pr!=null){pr+=c.pr; pn++;}
+    if(c.sr!=null){sr+=c.sr; sn++;}
+  });
+  return n?{hi:hi/n,lo:lo/n,pr:pn?pr:null,sr:sn?sr/sn:null}:null;
+}
+const rainUnit=()=>gran==="day"?"in/day":gran==="week"?"in/week":"in/month";
+
+/* ---------- search ---------- */
+let searchTimer=null;
+$("q").addEventListener("input",e=>{
+  clearTimeout(searchTimer);
+  const q=e.target.value.trim();
+  if(q.length<2){$("results").hidden=true; return;}
+  searchTimer=setTimeout(()=>runSearch(q),280);
+});
+$("q").addEventListener("keydown",e=>{ if(e.key==="Escape") $("results").hidden=true; });
+document.addEventListener("click",e=>{ if(!e.target.closest(".search")) $("results").hidden=true; });
+
+async function runSearch(q){
+  const box=$("results");
+  try{
+    const j=await grab(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`);
+    const hits=j.results||[];
+    if(!hits.length){ box.innerHTML=`<div class="none">Nothing matched “${esc(q)}”.</div>`; box.hidden=false; return; }
+    box.innerHTML=hits.map((h,i)=>{
+      const where=[h.admin1,h.country].filter(Boolean).join(", ");
+      return `<div data-i="${i}"><span>${esc(h.name)}</span> <span class="where">${esc(where)}</span></div>`;
+    }).join("");
+    box.hidden=false;
+    box.querySelectorAll("[data-i]").forEach(el=>el.onclick=()=>{
+      const h=hits[+el.dataset.i];
+      box.hidden=true; $("q").value=""; $("q").blur();
+      addCity(h.latitude,h.longitude,shortLabel(h));
+    });
+  }catch(err){ box.innerHTML=`<div class="none">Search is unreachable right now.</div>`; box.hidden=false; }
+}
+function shortLabel(h){
+  const region=h.country_code==="US"?(US[h.admin1]||h.admin1):h.country_code;
+  return [h.name,region].filter(Boolean).join(", ");
+}
+const US={Alabama:"AL",Alaska:"AK",Arizona:"AZ",Arkansas:"AR",California:"CA",Colorado:"CO",Connecticut:"CT",
+Delaware:"DE",Florida:"FL",Georgia:"GA",Hawaii:"HI",Idaho:"ID",Illinois:"IL",Indiana:"IN",Iowa:"IA",Kansas:"KS",
+Kentucky:"KY",Louisiana:"LA",Maine:"ME",Maryland:"MD",Massachusetts:"MA",Michigan:"MI",Minnesota:"MN",
+Mississippi:"MS",Missouri:"MO",Montana:"MT",Nebraska:"NE",Nevada:"NV","New Hampshire":"NH","New Jersey":"NJ",
+"New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND",Ohio:"OH",Oklahoma:"OK",Oregon:"OR",
+Pennsylvania:"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD",Tennessee:"TN",Texas:"TX",
+Utah:"UT",Vermont:"VT",Virginia:"VA",Washington:"WA","West Virginia":"WV",Wisconsin:"WI",Wyoming:"WY"};
+
+/* ---------- cities ---------- */
+function nextColor(){
+  const used=new Set(cities.map(c=>c.color));
+  return PALETTE.find(c=>!used.has(c))||PALETTE[0];
+}
+
+async function addCity(lat,lon,label){
+  if(cities.length>=MAX_CITIES){ note(`Five cities is the ceiling — remove one before adding another.`); return; }
+  const key=`${lat.toFixed(3)},${lon.toFixed(3)}`;
+  if(cities.some(c=>c.key===key)){ note(`${esc(label)} is already on the chart.`); return; }
+
+  const city={key,label,lat,lon,color:nextColor(),byDate:new Map(),
+              climRaw:null,clim:null,soilBase:null,soil:null,api:null,loading:true,id:++seq};
+  cities.push(city);
+  await loadCity(city);
+  if(cities.includes(city)){ maybeLoadClim(); maybeLoadSoil(); }
+}
+
+async function loadCity(city){
+  city.loading=true; city.byDate=new Map(); city.soil=null; city.api=null;
+  city.soilTried=false;
+  renderChips(); syncButtons();
+
+  // The forecast endpoint only reaches a couple of weeks back, so it's only useful
+  // for the current year; past years come entirely from the archive.
+  const reqs=[grab(`${archBase}?latitude=${city.lat}&longitude=${city.lon}`
+    +`&start_date=${START}&end_date=${OBS_END}${varsA}${units}`)];
+  if(IS_CURRENT) reqs.push(grab(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}`
+    +`&longitude=${city.lon}${varsF}${units}&past_days=14&forecast_days=${FC_DAYS}`));
+
+  const res=await Promise.allSettled(reqs);
+  if(res[0].status==="fulfilled") absorb(city,res[0].value,"archive");
+  if(res[1]&&res[1].status==="fulfilled") absorb(city,res[1].value,"model");
+
+  city.loading=false;
+  if(!city.byDate.size){
+    cities=cities.filter(c=>c!==city); renderChips(); syncButtons();
+    const why=res.map(r=>r.status==="rejected"?r.reason.message:null).filter(Boolean).join("; ");
+    note(`Couldn't load ${esc(city.label)} for ${year}${why?` — <code>${esc(why)}</code>`:""}.`);
+    return;
+  }
+  city.nwsDays=0;
+  if(IS_CURRENT){
+    // Non-US points return 404 here; the model blend just stays in place.
+    try{
+      const nws=await nwsForecast(city.lat,city.lon);
+      if(nws) applyNws(city,nws);
+    }catch(e){ city.nwsDays=0; }
+  }
+  buildCumulative(city);
+  renderChips(); clearNote(); draw();
+}
+
+// Year change: the calendar-keyed normals survive, but the year's own series doesn't.
+async function reloadYear(){
+  const list=cities.slice();
+  list.forEach(c=>{ c.clim=null; c.climTried=false; });
+  await Promise.all(list.map(c=>loadCity(c)));
+  if(cities.length){ draw(); maybeLoadClim(); maybeLoadSoil(); }
+}
+
+function absorb(city,json,tag){
+  const d=json&&json.daily; if(!d||!d.time) return;
+  const get=(k,i)=>(d[k]&&d[k][i]!=null)?d[k][i]:null;
+  d.time.forEach((t,i)=>{
+    const hi=get("temperature_2m_max",i), lo=get("temperature_2m_min",i);
+    if(hi==null||lo==null||t<START||t>HORIZON) return;
+    const mn=get("temperature_2m_mean",i), pr=get("precipitation_sum",i),
+          sr=get("shortwave_radiation_sum",i), uv=get("uv_index_max",i),
+          pop=get("precipitation_probability_max",i);
+    const prev=city.byDate.get(t);
+    if(prev&&prev.src==="archive"){
+      // Observed beats modelled — but UV and rain chance are absent from the
+      // archive, so merge those in from the model response.
+      if(prev.uv==null&&uv!=null) prev.uv=uv;
+      if(prev.pop==null&&pop!=null) prev.pop=pop;
+      return;
+    }
+    city.byDate.set(t,{date:t,hi,lo,mean:mn==null?(hi+lo)/2:mn,pr,
+      solar:sr==null?null:sr/3.6, uv, pop, src:tag, fc:t>OBS_END});
+  });
+}
+
+// NWS is the authoritative US forecast and is what weather.com / Weather Underground
+// show. Open-Meteo's model blend runs several degrees off it, so NWS wins where it
+// has coverage. Two calls: resolve the grid, then read the periods.
+async function nwsForecast(lat,lon){
+  const p=await grab(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`);
+  const url=p&&p.properties&&p.properties.forecast;
+  if(!url) return null;
+  const f=await grab(url);
+  const per=f&&f.properties&&f.properties.periods;
+  if(!per||!per.length) return null;
+  const out=new Map();
+  per.forEach(x=>{
+    if(x.temperatureUnit!=="F"||x.temperature==null) return;
+    const d=x.startTime.slice(0,10);
+    const r=out.get(d)||{};
+    // Daytime period is that date's high; the night that follows is its low —
+    // the same pairing a phone weather app displays.
+    if(x.isDaytime) r.hi=x.temperature; else r.lo=x.temperature;
+    const p=x.probabilityOfPrecipitation&&x.probabilityOfPrecipitation.value;
+    if(p!=null) r.pop=Math.max(r.pop==null?0:r.pop,p);   // highest of day and night
+    out.set(d,r);
+  });
+  return out;
+}
+
+function applyNws(city,nws){
+  let n=0;
+  nws.forEach((v,d)=>{
+    if(d<=OBS_END) return;                 // never overwrite an observation
+    const r=city.byDate.get(d); if(!r) return;
+    if(v.hi!=null){ r.hi=v.hi; n++; }
+    if(v.lo!=null) r.lo=v.lo;
+    if(v.pop!=null) r.pop=v.pop;
+    r.mean=(r.hi+r.lo)/2;                  // NWS gives no daily mean
+    r.src="nws";
+  });
+  city.nwsDays=n;
+}
+
+function buildCumulative(city){
+  let run=0;
+  DATES.forEach(t=>{const r=city.byDate.get(t); if(!r) return; run+=r.pr||0; r.cum=run;});
+  city.totalRain=run;
+}
+
+function removeCity(id){
+  cities=cities.filter(c=>c.id!==id);
+  renderChips(); clearNote(); syncButtons();
+  if(cities.length) draw();
+  else { $("fig").hidden=true; $("stand").textContent="Search for a city to begin."; }
+  maybeLoadClim(); maybeLoadSoil();
+}
+
+/* ---------- normals ---------- */
+async function maybeLoadClim(){
+  if(cities.length!==1) return;
+  const c=cities[0];
+  if(c.clim||c.climTried) return;
+  c.climTried=true;
+  // The raw response is calendar data, so it survives a year change — only the
+  // built map needs redoing, to leave the viewed year out of its own baseline.
+  if(c.climRaw){ c.clim=buildClim(c.climRaw); draw(); return; }
+  $("fig").classList.add("pending");
+  try{
+    c.climRaw=await grab(`${archBase}?latitude=${c.lat}&longitude=${c.lon}`
+      +`&start_date=${CLIM_FROM}-01-01&end_date=${CLIM_TO}-12-31`
+      +`&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,shortwave_radiation_sum${units}`);
+    c.clim=buildClim(c.climRaw);
+  }catch(e){ c.clim=null; }
+  $("fig").classList.remove("pending");
+  if(cities.length===1&&cities[0]===c) draw();
+}
+
+function calendarKeys(){
+  const keys=[], y=2021;
+  for(let dt=new Date(y,0,1); dt.getFullYear()===y; dt.setDate(dt.getDate()+1))
+    keys.push(String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"));
+  return keys;
+}
+
+function buildClim(json){
+  const d=json.daily, acc=new Map();
+  d.time.forEach((t,i)=>{
+    const hi=d.temperature_2m_max[i], lo=d.temperature_2m_min[i], pr=d.precipitation_sum[i];
+    const sr=d.shortwave_radiation_sum?d.shortwave_radiation_sum[i]:null;
+    if(hi==null||lo==null) return;
+    if(+t.slice(0,4)===year) return;    // don't let a year sit inside its own baseline
+    const k=t.slice(5), a=acc.get(k)||{hi:0,lo:0,pr:0,sr:0,n:0,pn:0,sn:0};
+    a.hi+=hi; a.lo+=lo; a.n++;
+    if(pr!=null){a.pr+=pr; a.pn++;}
+    if(sr!=null){a.sr+=sr/3.6; a.sn++;}
+    acc.set(k,a);
+  });
+  const keys=calendarKeys();
+  const raw=keys.map(k=>{const a=acc.get(k);
+    return a?{hi:a.hi/a.n,lo:a.lo/a.n,pr:a.pn?a.pr/a.pn:null,sr:a.sn?a.sr/a.sn:null}:null;});
+  const out=new Map();
+  // Circular +/-7 day smooth. Daily rainfall needs it far more than temperature,
+  // since any single calendar date is dominated by a few wet years.
+  keys.forEach((k,i)=>{
+    let sh=0,sl=0,n=0,sp=0,pn=0,ss=0,sn=0;
+    for(let j=-SMOOTH;j<=SMOOTH;j++){
+      const v=raw[(i+j+keys.length)%keys.length];
+      if(!v) continue;
+      sh+=v.hi; sl+=v.lo; n++;
+      if(v.pr!=null){sp+=v.pr; pn++;}
+      if(v.sr!=null){ss+=v.sr; sn++;}
+    }
+    if(n) out.set(k,{hi:sh/n,lo:sl/n,mean:(sh+sl)/(2*n),pr:pn?sp/pn:null,sr:sn?ss/sn:null,
+                     prRaw:raw[i]&&raw[i].pr!=null?raw[i].pr:null});
+  });
+  return out;
+}
+
+/* ---------- soil ---------- */
+function dailyMean(json){
+  const h=json&&json.hourly, out=new Map();
+  if(!h||!h.time) return out;
+  const acc=new Map();
+  h.time.forEach((t,i)=>{
+    const v=h[SOIL_BAND][i]; if(v==null) return;
+    const d=t.slice(0,10), a=acc.get(d)||{s:0,n:0};
+    a.s+=v; a.n++; acc.set(d,a);
+  });
+  acc.forEach((a,d)=>out.set(d,a.s/a.n));
+  return out;
+}
+
+async function maybeLoadSoil(){
+  syncButtons();
+  if(!soilOn||cities.length!==1) return;
+  const c=cities[0];
+  if(c.soil||c.soilTried) return;
+  c.soilTried=true;
+  const btn=$("soilbtn"); btn.dataset.busy="1"; btn.textContent="Loading soil…"; syncButtons();
+  try{
+    const q=`&hourly=${SOIL_BAND}&timezone=auto`;
+    const cur=grab(`${archBase}?latitude=${c.lat}&longitude=${c.lon}&start_date=${START}&end_date=${OBS_END}${q}`);
+    // The baseline is calendar data, so fetch it once and reuse across year changes.
+    if(!c.soilBase)
+      c.soilBase=dailyMean(await grab(`${archBase}?latitude=${c.lat}&longitude=${c.lon}`
+        +`&start_date=${SOIL_FROM}-01-01&end_date=${SOIL_TO}-12-31${q}`));
+    c.soil=buildSoil(dailyMean(await cur),c.soilBase);
+    if(!c.soil.size) c.soil=null; else fitApi(c);
+  }catch(e){ c.soil=null; }
+  btn.dataset.busy=""; btn.textContent="Soil moisture";
+  if(!c.soil) note(`No soil moisture for ${esc(c.label)} — the reanalysis doesn't cover every grid cell.`);
+  syncButtons();
+  if(cities.length===1&&cities[0]===c) draw();
+}
+
+function buildSoil(cur,base){
+  const byKey=new Map();
+  base.forEach((v,d)=>{
+    if(+d.slice(0,4)===year) return;   // don't rank a year against itself
+    const k=d.slice(5), arr=byKey.get(k)||[]; arr.push(v); byKey.set(k,arr);
+  });
+  const keys=calendarKeys(), pos=new Map(keys.map((k,i)=>[k,i]));
+  const out=new Map();
+  cur.forEach((v,d)=>{
+    const i=pos.get(d.slice(5)); if(i==null) return;
+    let pool=[];
+    for(let j=-SOIL_WIN;j<=SOIL_WIN;j++) pool=pool.concat(byKey.get(keys[(i+j+keys.length)%keys.length])||[]);
+    if(pool.length<30) return;
+    let below=0,equal=0;
+    pool.forEach(x=>{ if(x<v) below++; else if(x===v) equal++; });
+    out.set(d,{pct:100*(below+equal/2)/pool.length, value:v, n:pool.length});
+  });
+  return out;
+}
+
+/* ---------- rainfall vs soil ---------- */
+function pearson(xs,ys){
+  const n=xs.length; if(n<8) return null;
+  const mx=xs.reduce((a,b)=>a+b,0)/n, my=ys.reduce((a,b)=>a+b,0)/n;
+  let sxy=0,sxx=0,syy=0;
+  for(let i=0;i<n;i++){const a=xs[i]-mx,b=ys[i]-my; sxy+=a*b; sxx+=a*a; syy+=b*b;}
+  if(sxx<=0||syy<=0) return null;
+  return sxy/Math.sqrt(sxx*syy);
+}
+// Antecedent precipitation index: a decayed running sum of prior rain, which turns the
+// flux (inches falling) into a stock — the same kind of quantity soil moisture is.
+function buildApi(city,k){
+  let run=0; const out=new Map();
+  DATES.forEach(t=>{
+    if(t>OBS_END) return;
+    const r=city.byDate.get(t); if(!r) return;
+    run=(r.pr||0)+k*run; out.set(t,run);
+  });
+  return out;
+}
+function rankMap(m){
+  const vals=[...m.values()].sort((a,b)=>a-b), out=new Map();
+  m.forEach((v,t)=>{
+    let lo=0,hi=vals.length;
+    while(lo<hi){const mid=(lo+hi)>>1; if(vals[mid]<v) lo=mid+1; else hi=mid;}
+    out.set(t,100*lo/Math.max(1,vals.length-1));
+  });
+  return out;
+}
+function fitApi(city){
+  if(!city.soil) return;
+  let best=null;
+  DECAYS.forEach(k=>{
+    const api=buildApi(city,k), xs=[], ys=[];
+    city.soil.forEach((sm,t)=>{const v=api.get(t); if(v!=null){xs.push(v); ys.push(sm.value);}});
+    const r=pearson(xs,ys);
+    if(r!=null&&(!best||r>best.r)) best={k,r,api};
+  });
+  if(best) city.api={k:best.k,r:best.r,val:best.api,pct:rankMap(best.api)};
+}
+function correlate(city,a,b){
+  const days=[]; for(let k=view.a;k<=Math.min(view.b,TODAY_IDX);k++) days.push(DATES[k]);
+  const out=[];
+  for(let lag=0;lag<=7;lag++){
+    const xs=[],ys=[];
+    days.forEach((t,i)=>{
+      const src=days[i-lag]; if(!src) return;
+      const x=a(city,src), y=b(city,t);
+      if(x==null||y==null||!isFinite(x)||!isFinite(y)) return;
+      xs.push(x); ys.push(y);
+    });
+    out.push({lag,r:pearson(xs,ys),n:xs.length});
+  }
+  return out;
+}
+const rainOf=(c,t)=>{const r=c.byDate.get(t); return r?(r.pr||0):null;};
+const soilOf=(c,t)=>{const s=c.soil&&c.soil.get(t); return s?s.value:null;};
+const dSoilOf=(c,t)=>{
+  const i=DATE_POS.get(t); if(i==null||i<1) return null;
+  const a=soilOf(c,DATES[i-1]), b=soilOf(c,t);
+  return (a==null||b==null)?null:b-a;
+};
+const rColor=r=>r==null?"transparent":
+  (r>=0?`rgba(79,165,168,${0.12+0.55*Math.min(1,Math.abs(r))})`
+       :`rgba(194,84,43,${0.12+0.55*Math.min(1,Math.abs(r))})`);
+const fmtR=r=>r==null?"—":(r>=0?"":"−")+Math.abs(r).toFixed(2);
+
+function renderStats(show){
+  const box=$("stats");
+  const c=cities.length===1?cities[0]:null;
+  if(!show||!c||!c.soil){ box.hidden=true; return; }
+  const level=correlate(c,rainOf,soilOf), delta=correlate(c,rainOf,dSoilOf);
+  const apiRow=c.api?correlate(c,(x,t)=>{const v=x.api.val.get(t); return v==null?null:v;},soilOf):null;
+  const bestOf=rows=>rows.reduce((a,b)=>(b.r!=null&&(a==null||a.r==null||b.r>a.r))?b:a,null);
+  const bd=bestOf(delta), bl=bestOf(level), ba=apiRow?bestOf(apiRow):null;
+  const n=level[0]?level[0].n:0;
+  const row=(label,rows,best)=>`<tr><td>${label}</td>`
+    +rows.map(x=>`<td${best&&x.lag===best.lag?' class="best"':''}>`
+      +`<span class="cell" style="background:${rColor(x.r)}">${fmtR(x.r)}</span></td>`).join("")+`</tr>`;
+  const halfLife=c.api?Math.log(0.5)/Math.log(c.api.k):null;
+
+  box.innerHTML=`<h2>Rainfall against soil moisture, 7&ndash;28&thinsp;cm</h2>`
+    +`<p class="lede">Pearson r over the ${n} observed days in view. `
+    +(bd&&bd.r!=null?`Daily rain tracks the <b>change</b> in soil moisture best at a lag of `
+        +`<b>${bd.lag} day${bd.lag===1?"":"s"}</b> (r&nbsp;=&nbsp;<b>${fmtR(bd.r)}</b>), while against the soil `
+        +`<b>level</b> it manages only <b>${fmtR(bl?bl.r:null)}</b> — a flux and a stock don't track each other.`
+      :`Not enough overlapping days in this window for a stable correlation.`)
+    +(ba&&ba.r!=null?` The antecedent index reaches <b>${fmtR(ba.r)}</b>.`:``)+`</p>`
+    +`<div class="scroller"><table><thead><tr><th></th>`
+      +[0,1,2,3,4,5,6,7].map(l=>`<th>lag ${l}</th>`).join("")+`</tr></thead><tbody>`
+    +row("Rain → soil level",level,bl)
+    +row("Rain → daily change",delta,bd)
+    +(apiRow?row("Antecedent index → level",apiRow,ba):``)
+    +`</tbody></table></div>`
+    +`<p class="foot">Always computed on <b>daily</b> values, whatever the aggregation above is set to — `
+    +`weekly or monthly buckets would wash out the very lags this is measuring. `
+    +(c.api?`Index decay fitted per location: k&nbsp;=&nbsp;${c.api.k} (half-life ${halfLife.toFixed(1)} days). `:``)
+    +`Both series come from the same reanalysis, so soil moisture is that model's response to that model's `
+    +`rainfall — this measures ERA5's soil physics, not Rankin County's.</p>`;
+  box.hidden=false;
+}
+
+/* ---------- chrome ---------- */
+function renderChips(){
+  $("chips").innerHTML=cities.map(c=>
+    `<span class="chip${c.loading?" busy":""}"><span class="dot" style="background:${c.color}"></span>`
+    +`${esc(c.label)}${c.loading?" …":""}`
+    +`<button data-id="${c.id}" aria-label="Remove ${esc(c.label)}">×</button></span>`).join("");
+  $("chips").querySelectorAll("[data-id]").forEach(b=>b.onclick=()=>removeCity(+b.dataset.id));
+}
+function note(html){ $("state").innerHTML=html; $("state").hidden=false; }
+function clearNote(){ $("state").hidden=true; }
+
+function syncButtons(){
+  const chart=mode==="chart";
+  $("granpick").hidden=!chart;
+  $("hotctl").hidden=chart;
+  $("panelpick").style.display=chart?"":"none";
+  document.querySelectorAll("[data-days]").forEach(b=>b.hidden=!chart);
+  $("out").hidden=!chart;
+  $("tabs").querySelectorAll("[data-mode]").forEach(b=>
+    b.setAttribute("aria-pressed",String(b.dataset.mode===mode)));
+
+  const solo=cities.length===1;
+  const sb=$("soilbtn"), lb=$("solarbtn");
+  sb.hidden=!chart; lb.hidden=!chart;
+  sb.disabled=!solo||sb.dataset.busy==="1";
+  sb.setAttribute("aria-pressed",String(soilOn&&solo));
+  lb.disabled=!solo;
+  lb.setAttribute("aria-pressed",String(solarOn&&solo));
+  $("granpick").querySelectorAll("[data-gran]").forEach(b=>
+    b.setAttribute("aria-pressed",String(b.dataset.gran===gran)));
+  const fcBtn=document.querySelector('[data-days="-1"]');
+  if(fcBtn&&chart) fcBtn.hidden=!IS_CURRENT;   // nothing to forecast in a finished year
+  renderPanelPick();
+}
+
+// On a phone the panels are shown one at a time, so the picker doubles as the toggle.
+function renderPanelPick(){
+  const solo=cities.length===1?cities[0]:null;
+  const busy=$("soilbtn").dataset.busy==="1";
+  const opts=[["temp","Temperature"],["rain","Rainfall"]];
+  if(solo) opts.push(["soil",busy?"Soil…":"Soil"],["solar","Solar & UV"]);
+  $("panelpick").innerHTML=opts.map(([k,label])=>
+    `<button data-panel="${k}" aria-pressed="${String(activePanel===k)}">${label}</button>`).join("");
+  $("panelpick").querySelectorAll("[data-panel]").forEach(b=>b.onclick=()=>{
+    activePanel=b.dataset.panel;
+    if(activePanel==="solar") solarOn=true;
+    if(activePanel==="soil"&&!soilOn) soilOn=true;
+    if(activePanel==="soil") maybeLoadSoil();
+    renderPanelPick(); draw();
+  });
+}
+
+/* ---------- hot days by month ----------
+   Counts observed days whose high reached the threshold. Forecast days are excluded:
+   a modelled 101°F is not an observation, and mixing them would inflate the count. */
+function hotByMonth(city){
+  const out=new Array(12).fill(null);
+  for(let i=0;i<=TODAY_IDX;i++){
+    const r=city.byDate.get(DATES[i]); if(!r) continue;
+    const m=+DATES[i].slice(5,7)-1;
+    if(out[m]==null) out[m]={days:0,obs:0};
+    out[m].obs++;
+    if(r.hi>=thresh) out[m].days++;
+  }
+  return out;
+}
+// Baseline comes from the same 25-year response the normals use, so it costs nothing extra.
+function hotNormal(city){
+  if(!city.climRaw) return null;
+  const d=city.climRaw.daily, acc=new Map(), years=new Set();
+  d.time.forEach((t,i)=>{
+    const v=d.temperature_2m_max[i]; if(v==null) return;
+    const y=+t.slice(0,4); if(y===year) return;      // exclude the year being viewed
+    years.add(y);
+    const k=y+":"+(+t.slice(5,7)-1);
+    acc.set(k,(acc.get(k)||0)+(v>=thresh?1:0));
+  });
+  if(!years.size) return null;
+  const out=new Array(12).fill(0);
+  years.forEach(y=>{ for(let m=0;m<12;m++) out[m]+=(acc.get(y+":"+m)||0); });
+  return out.map(v=>v/years.size);
+}
+
+function drawHot(){
+  const svg=$("chart"); $("fig").hidden=false;
+  const M=isMobile();
+  const solo=cities.length===1?cities[0]:null;
+  const counts=cities.map(c=>({c,months:hotByMonth(c)}));
+  const norm=solo?hotNormal(solo):null;
+
+  const W=M?380:1000, L=M?30:44, R=M?8:12, T=M?26:30, BH=M?230:300;
+  const iw=W-L-R, XLAB=T+BH+22, H=XLAB+(M?16:20);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+
+  let ymax=1;
+  counts.forEach(s=>s.months.forEach(v=>{ if(v) ymax=Math.max(ymax,v.days); }));
+  if(norm) norm.forEach(v=>ymax=Math.max(ymax,v));
+  ymax=Math.max(4,Math.ceil(ymax/2)*2);
+  const Y=v=>T+BH-(v/ymax)*BH;
+  const slot=iw/12;
+
+  let s="";
+  const ticks=ymax<=8?ymax/2:4;
+  for(let k=0;k<=ticks;k++){
+    const v=Math.round(ymax*k/ticks);
+    s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
+      +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}</text>`;
+  }
+  s+=`<text class="panellabel" x="${L}" y="${T-10}">Days reaching ${thresh}°F, by month — ${year}</text>`;
+
+  const n=cities.length, gap=slot*0.18, bw=(slot-gap*2)/n;
+  MONTHS.forEach((mn,m)=>{
+    const x0=L+slot*m+gap;
+    counts.forEach((sr,ci)=>{
+      const v=sr.months[m];
+      if(!v) return;                                   // month not reached yet
+      const x=x0+bw*ci;
+      if(v.days>0){
+        const h=Math.max(1.5,T+BH-Y(v.days));
+        s+=`<rect x="${x.toFixed(1)}" y="${(T+BH-h).toFixed(1)}" width="${bw.toFixed(1)}" `
+          +`height="${h.toFixed(1)}" fill="${n===1?"var(--hot)":sr.c.color}"/>`
+          +`<text x="${(x+bw/2).toFixed(1)}" y="${(T+BH-h-5).toFixed(1)}" text-anchor="middle" `
+          +`fill="var(--ink)" font-size="${M?10:11}">${v.days}</text>`;
+      }
+      // A month still in progress is marked, so a low count isn't misread as mild.
+      if(v.obs<daysInMonth(m))
+        s+=`<text x="${(x+bw/2).toFixed(1)}" y="${(T+BH+11).toFixed(1)}" text-anchor="middle" `
+          +`fill="var(--ink-soft)" font-size="9">${v.obs}d</text>`;
+    });
+    if(norm&&norm[m]>0.05){
+      const y=Y(norm[m]);
+      s+=`<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x0+slot-gap*2).toFixed(1)}" `
+        +`y2="${y.toFixed(1)}" stroke="var(--normal-edge)" stroke-width="1.4" stroke-dasharray="5 3"/>`;
+    }
+    s+=`<text x="${(L+slot*(m+0.5)).toFixed(1)}" y="${XLAB}" text-anchor="middle">${mn}</text>`;
+  });
+  svg.innerHTML=s;
+  svg._geom=null;
+
+  $("key").innerHTML=(n===1
+      ? `<span><i style="background:var(--hot)"></i>Days at or above ${thresh}°F</span>`
+      : cities.map(c=>`<span><i style="background:${c.color}"></i>${esc(c.label)}</span>`).join(""))
+    +(norm?`<span><i class="dashed"></i>Typical for the month, ${CLIM_FROM}&ndash;${CLIM_TO}</span>`:``);
+
+  const total=counts.map(sr=>({label:sr.c.label,
+    n:sr.months.reduce((a,v)=>a+(v?v.days:0),0)}));
+  if(solo){
+    const nt=norm?norm.reduce((a,b)=>a+b,0):null;
+    const worst=solo&&(()=>{ let bm=-1,bv=0;
+      counts[0].months.forEach((v,m)=>{ if(v&&v.days>bv){bv=v.days;bm=m;} }); return {m:bm,v:bv}; })();
+    $("stand").innerHTML=`<b>${esc(solo.label)}</b> — <b>${total[0].n}</b> day${total[0].n===1?"":"s"} `
+      +`reached <b>${thresh}°F</b> in ${year}`
+      +(worst.m>=0?`, most of them in <b>${MONTHS_FULL[worst.m]}</b> (${worst.v}).`:` so far.`)
+      +(nt!=null?` A typical year at this location sees <b>${nt.toFixed(1)}</b> such days, `
+        +`averaged over ${CLIM_FROM}&ndash;${CLIM_TO}.`:``)
+      +(IS_CURRENT?` Forecast days are excluded — observations only.`:``);
+  }else{
+    $("stand").innerHTML=`Days reaching <b>${thresh}°F</b> in ${year}: `
+      +total.sort((a,b)=>b.n-a.n).map(t=>`<b>${esc(t.label)}</b> ${t.n}`).join(", ")+`.`;
+  }
+  $("hint2").textContent="Small grey figures mark months with partial data. "
+    +"Dashed rules show the long-run average for that month.";
+  $("stats").hidden=true;
+  $("readout").innerHTML=`<span class="stat">Counting daily highs at or above `
+    +`<b>${thresh}°F</b>, observed days only.</span>`;
+}
+const daysInMonth=m=>[31,(year%4===0&&year%100!==0)||year%400===0?29:28,31,30,31,30,31,31,30,31,30,31][m];
+
+
+// Label only turning points, taken strongest-first and rejected if they'd sit too
+// close to one already placed. Density then stays constant at any zoom level.
+function pickLabels(arr,f,isMax,X,minGap,maxN){
+  const val=i=>{const r=arr[i]; if(!r) return null; const v=f(r); return v==null?null:v;};
+  const cand=[];
+  for(let i=0;i<arr.length;i++){
+    const v=val(i); if(v==null) continue;
+    const p=i>0?val(i-1):null, n=i<arr.length-1?val(i+1):null;
+    const turn=(p==null||(isMax?v>=p:v<=p))&&(n==null||(isMax?v>=n:v<=n));
+    if(turn) cand.push({i,v});
+  }
+  cand.sort((a,b)=>isMax?b.v-a.v:a.v-b.v);
+  const out=[];
+  for(const c of cand){
+    if(out.length>=maxN) break;
+    if(out.every(o=>Math.abs(X(o.i)-X(c.i))>=minGap)) out.push(c);
+  }
+  return out;
+}
+
+// Renders a period into the readout. select=false fills it in without claiming a
+// selection, which is how today's numbers appear on first load.
+function renderReadout(i,select){
+  const svg=$("chart"), read=$("readout"), g=svg._geom;
+  if(!g||!g.B||!g.B[i]) return;
+  const b=g.B[i], solo=cities.length===1?cities[0]:null;
+  if(select){
+    selDate=b.first;
+    const hr=svg.querySelector("#hr");
+    if(hr){hr.setAttribute("x1",g.X(i).toFixed(1)); hr.setAttribute("x2",g.X(i).toFixed(1)); hr.style.display="";}
+  }
+  let html=`<div class="line"><span class="date">${b.long}</span>`
+    +(b.allFc?`<span class="tag">forecast</span>`:b.anyFc?`<span class="tag">part forecast</span>`:``)
+    +(!select&&!b.anyFc?`<span class="tag">today</span>`:``)
+    +(gran==="day"?``:`<span class="span">${b.idxs.length} days</span>`)+`</div>`;
+  if(solo){
+    const r=g.A.get(solo)[i]; if(!r){read.innerHTML=html; return;}
+    const n=solo.clim?aggClim(solo.clim,b):null;
+    html+=`<div class="line"><span class="stat max">high <b>${r.hi.toFixed(gran==="day"?0:1)}°</b></span>`
+      +`<span class="stat min">low <b>${r.lo.toFixed(gran==="day"?0:1)}°</b></span>`
+      +`<span class="stat">mean <b>${r.mean.toFixed(1)}°</b></span>`
+      +(n?`<span class="stat">vs normal <b>${r.mean>=(n.hi+n.lo)/2?"+":"−"}`
+          +`${Math.abs(r.mean-(n.hi+n.lo)/2).toFixed(1)}°</b></span>`:``)
+      +`<span class="stat wet">rain <b>${r.rain==null?"—":r.rain.toFixed(2)+'"'}</b></span>`
+      +(r.pop!=null?`<span class="stat wet">chance <b>${Math.round(r.pop)}%</b></span>`:``)
+      +(r.uv!=null?`<span class="stat" style="color:var(--uv)">UV `
+          +`<b style="color:var(--uv)">${r.uv.toFixed(1)}</b></span>`:``)
+      +(soilOn&&r.soilPct!=null?`<span class="stat dirt">soil <b>${Math.round(r.soilPct)}th</b> `
+          +`<span style="opacity:.75">${wetWord(r.soilPct)}</span></span>`:``)
+      +(solarOn&&r.solar!=null?`<span class="stat" style="color:var(--solar)">solar `
+          +`<b style="color:var(--solar)">${r.solar.toFixed(1)}</b> kWh/m²/day</span>`:``)
+      +`</div>`;
+  }else{
+    cities.forEach(c=>{
+      const r=g.A.get(c)[i]; if(!r) return;
+      html+=`<div class="line"><span class="who"><i style="display:inline-block;width:9px;height:9px;`
+        +`border-radius:50%;background:${c.color};margin-right:7px"></i>${esc(c.label)}</span>`
+        +`<span class="stat max">high <b>${r.hi.toFixed(gran==="day"?0:1)}°</b></span>`
+        +`<span class="stat min">low <b>${r.lo.toFixed(gran==="day"?0:1)}°</b></span>`
+        +`<span class="stat wet">rain to date <b>${(r.cum||0).toFixed(2)}"</b></span></div>`;
+    });
+  }
+  read.innerHTML=html;
+}
+
+function draw(){
+  if(!cities.length) return;
+  if(mode==="hot") return drawHot();
+  const svg=$("chart"); $("fig").hidden=false;
+  const M=isMobile();
+  const solo=cities.length===1?cities[0]:null;
+  const hasSoil=!!(solo&&soilOn&&solo.soil);
+  const hasSolar=!!(solo&&solarOn);
+
+  let list;
+  if(M){
+    let p=activePanel;
+    if(p==="soil"&&!hasSoil) p="temp";
+    if(p==="solar"&&!hasSolar) p="temp";
+    if(!solo&&(p==="soil"||p==="solar")) p="temp";
+    list=[p];
+  }else{
+    list=["temp","rain"];
+    if(hasSoil) list.push("soil");
+    if(hasSolar) list.push("solar");
+  }
+  const showSoil=list.includes("soil"), showSolar=list.includes("solar");
+
+  // Visible buckets: whole buckets that overlap the view, so a month bar always sums
+  // its whole month even when only part of it is on screen.
+  const B=buildBuckets(gran).filter(b=>b.idxs[b.idxs.length-1]>=view.a && b.idxs[0]<=view.b);
+  if(!B.length) return;
+  const NB=B.length;
+
+  const W=M?380:1000;
+  const L=M?34:52;
+  const R=showSolar?(M?24:38):(M?8:12);
+  const iw=W-L-R;
+
+  const geom={}; let y=M?12:14;
+  list.forEach(p=>{
+    const lab=(p==="temp")?(M?20:0):(M?20:22);
+    const h=M?(p==="temp"?252:210):(p==="temp"?294:p==="rain"?104:p==="soil"?88:96);
+    y+=lab; geom[p]={top:y,h}; y+=h+(M?0:42);
+  });
+  const BOT=y-(M?0:42);
+  const XLAB=BOT+(M?20:24), H=XLAB+(M?14:18);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const has=p=>!!geom[p];
+  const X=i=>L+(NB<2?iw/2:i*iw/(NB-1));
+
+  // Pre-aggregate every city and the normals once per draw.
+  const A=new Map(cities.map(c=>[c,B.map(b=>aggCity(c,b))]));
+  const CN=(solo&&solo.clim)?B.map(b=>aggClim(solo.clim,b)):null;
+
+  // Split at the first fully-forecast bucket, overlapping by one so lines join.
+  let firstFc=B.findIndex(b=>b.allFc);
+  const boundary=firstFc===-1?NB-1:Math.max(0,firstFc-1);
+  const poly=(arr,f,past)=>{
+    const out=[];
+    arr.forEach((r,i)=>{
+      if(r==null) return;
+      if(past?i>boundary:i<boundary) return;
+      const v=f(r); if(v==null||!isFinite(v)) return;
+      out.push(`${X(i).toFixed(1)},${v.toFixed(1)}`);
+    });
+    return out;
+  };
+  const emit=(arr,f,cls,extra)=>{
+    let s="";
+    [[true,cls],[false,cls+" fc"]].forEach(([past,c])=>{
+      const p=poly(arr,f,past);
+      if(p.length>1) s+=`<polyline class="${c}" ${extra||""} points="${p.join(" ")}"/>`;
+    });
+    return s;
+  };
+
+  let s="";
+
+  /* temperature */
+  let Y=null;
+  if(has("temp")){
+    const g=geom.temp;
+    let lo=Infinity,hi=-Infinity;
+    cities.forEach(c=>A.get(c).forEach(r=>{ if(!r) return;
+      if(solo){lo=Math.min(lo,r.lo); hi=Math.max(hi,r.hi);} else {lo=Math.min(lo,r.mean); hi=Math.max(hi,r.mean);}}));
+    if(CN) CN.forEach(n=>{ if(n){lo=Math.min(lo,n.lo); hi=Math.max(hi,n.hi);} });
+    if(!isFinite(lo)){lo=40;hi=90;}
+    const y0=Math.floor((lo-4)/10)*10, y1=Math.ceil((hi+4)/10)*10;
+    Y=v=>g.top+g.h-(v-y0)/(y1-y0)*g.h;
+    const step=(M&&y1-y0>60)?20:10;
+    for(let v=y0;v<=y1;v+=step)
+      s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
+        +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}°</text>`;
+    if(M||gran!=="day") s+=`<text class="panellabel" x="${L}" y="${g.top-6}">Temperature °F`
+      +(gran==="day"?``:` — mean daily high and low per ${gran}`)+`</text>`;
+  }
+
+  /* rainfall */
+  let PY=null;
+  if(has("rain")){
+    const g=geom.rain;
+    let pmax=0;
+    if(solo){
+      A.get(solo).forEach(r=>{ if(r&&r.rain!=null) pmax=Math.max(pmax,r.rain); });
+      if(CN) CN.forEach(n=>{ if(n&&n.pr!=null) pmax=Math.max(pmax,n.pr); });
+      pmax=gran==="day"?Math.max(0.25,Math.ceil(pmax*4)/4):Math.max(1,Math.ceil(pmax));
+    }else{
+      cities.forEach(c=>A.get(c).forEach(r=>{ if(r&&r.cum!=null) pmax=Math.max(pmax,r.cum); }));
+      pmax=Math.max(1,Math.ceil(pmax));
+    }
+    PY=v=>g.top+g.h-(v/pmax)*g.h;
+    [0,pmax/2,pmax].forEach(v=>{
+      s+=`<line class="gridline" x1="${L}" y1="${PY(v).toFixed(1)}" x2="${W-R}" y2="${PY(v).toFixed(1)}"/>`
+        +`<text x="${L-8}" y="${(PY(v)+4).toFixed(1)}" text-anchor="end">${pmax<2?v.toFixed(2):v.toFixed(1)}"</text>`;
+    });
+    s+=`<text class="panellabel" x="${L}" y="${g.top-6}">`
+      +(solo?`Rainfall, ${rainUnit()}`:`Cumulative rain since 1 Jan, in`)+`</text>`;
+  }
+
+  /* soil */
+  let SY=null;
+  if(showSoil){
+    const g=geom.soil;
+    SY=v=>g.top+g.h-(v/100)*g.h;
+    // Gradient runs down the panel in user space, so a point's colour is its percentile.
+    s+=`<defs><linearGradient id="soilgrad" gradientUnits="userSpaceOnUse" `
+      +`x1="0" y1="${SY(0).toFixed(1)}" x2="0" y2="${SY(100).toFixed(1)}">`
+      +SOIL_STOPS.map(([p,c])=>`<stop offset="${p}%" stop-color="${c}"/>`).join("")+`</linearGradient></defs>`
+      +`<rect class="normalband" x="${L}" y="${SY(70).toFixed(1)}" width="${iw}" height="${(SY(30)-SY(70)).toFixed(1)}"/>`;
+    [0,50,100].forEach(v=>{
+      s+=`<line class="gridline" x1="${L}" y1="${SY(v).toFixed(1)}" x2="${W-R}" y2="${SY(v).toFixed(1)}"/>`
+        +`<text x="${L-8}" y="${(SY(v)+4).toFixed(1)}" text-anchor="end">${v}</text>`;
+    });
+    s+=`<text class="panellabel" x="${L}" y="${g.top-6}">Soil 7&ndash;28&thinsp;cm, percentile vs ${SOIL_FROM}&ndash;${SOIL_TO}</text>`;
+  }
+
+  /* solar + UV */
+  let UY=null,VY=null;
+  if(showSolar){
+    const g=geom.solar;
+    let smax=0,umax=0;
+    A.get(solo).forEach(r=>{ if(!r) return;
+      if(r.solar!=null) smax=Math.max(smax,r.solar);
+      if(r.uv!=null) umax=Math.max(umax,r.uv); });
+    if(CN) CN.forEach(n=>{ if(n&&n.sr!=null) smax=Math.max(smax,n.sr); });
+    smax=Math.max(1,Math.ceil(smax)); umax=Math.max(4,Math.ceil(umax));
+    UY=v=>g.top+g.h-(v/smax)*g.h;
+    VY=v=>g.top+g.h-(v/umax)*g.h;
+    [0,smax/2,smax].forEach(v=>{
+      s+=`<line class="gridline" x1="${L}" y1="${UY(v).toFixed(1)}" x2="${W-R}" y2="${UY(v).toFixed(1)}"/>`
+        +`<text x="${L-8}" y="${(UY(v)+4).toFixed(1)}" text-anchor="end">${v.toFixed(1)}</text>`;});
+    [0,umax/2,umax].forEach(v=>{
+      s+=`<text x="${W-R+6}" y="${(VY(v)+4).toFixed(1)}" fill="var(--uv)">${v.toFixed(0)}</text>`;});
+    s+=`<text class="panellabel" x="${L}" y="${g.top-6}">`
+      +`<tspan fill="var(--solar)">Solar kWh/m² per day</tspan><tspan> · </tspan>`
+      +`<tspan fill="var(--uv)">UV index (right)</tspan></text>`;
+  }
+
+  /* x axis */
+  const rule=i=>list.map(p=>`<line class="monthrule" x1="${X(i).toFixed(1)}" y1="${geom[p].top}" `
+    +`x2="${X(i).toFixed(1)}" y2="${geom[p].top+geom[p].h}"/>`).join("");
+  const maxLab=M?5:12;
+  const step=Math.max(1,Math.ceil(NB/maxLab));
+  B.forEach((b,i)=>{
+    if(i%step) return;
+    s+=rule(i)+`<text x="${X(i).toFixed(1)}" y="${XLAB}" text-anchor="middle">${b.label}</text>`;
+  });
+
+  /* series */
+  if(has("temp")){
+    if(solo){
+      if(CN){
+        const top=CN.map((n,i)=>n?`${X(i).toFixed(1)},${Y(n.hi).toFixed(1)}`:null).filter(Boolean);
+        const bot=CN.map((n,i)=>n?`${X(i).toFixed(1)},${Y(n.lo).toFixed(1)}`:null).filter(Boolean);
+        if(top.length>1) s+=`<polygon class="normalband" points="${top.join(" ")} ${bot.slice().reverse().join(" ")}"/>`
+          +`<polyline class="normaledge" points="${top.join(" ")}"/>`
+          +`<polyline class="normaledge" points="${bot.join(" ")}"/>`;
+      }
+      const a=A.get(solo);
+      s+=emit(a,r=>Y(r.hi),"hi")+emit(a,r=>Y(r.lo),"lo")+emit(a,r=>Y(r.mean),"meanline");
+      if(NB<=60&&(NB<2?iw:iw/(NB-1))<2*(M?10:11.5))
+        a.forEach((r,i)=>{ if(r) s+=`<circle cx="${X(i).toFixed(1)}" cy="${Y(r.mean).toFixed(1)}" `
+          +`r="2.4" fill="var(--ink)"${B[i].allFc?' fill-opacity="0.5"':''}/>`; });
+      {
+        const g=geom.temp, gap=M?44:62, maxN=M?5:9;
+        const spacing=NB<2?iw:iw/(NB-1);
+        const rr=M?10:11.5, fs=M?10:10.5;
+        // A labelled node on every point, but only while the circles can't touch.
+        // Past that density they'd overlap into mush, so fall back to peak labels.
+        if(spacing>=2*rr){
+          a.forEach((r,i)=>{
+            if(!r) return;
+            [[r.hi,"var(--hot)"],[r.lo,"var(--cold)"]].forEach(([v,col])=>{
+              const cy=Y(v), cx=X(i), n=String(Math.round(v));
+              // Shrink only as far as the ring demands — 3-digit values need it, 2 don't.
+              const f=Math.min(fs,(2*rr-3)/(n.length*0.6));
+              s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr}" `
+                +`fill="var(--paper)" stroke="${col}" stroke-width="1.4"`
+                +(B[i].allFc?` stroke-dasharray="3 2"`:``)+`/>`
+                +`<text class="dnode" x="${cx.toFixed(1)}" y="${(cy+f*0.35).toFixed(1)}" `
+                +`text-anchor="middle" fill="${col}" font-size="${f.toFixed(1)}">${n}</text>`;
+            });
+          });
+        }else{
+          // Zoomed in far enough that every point has room? Label them all.
+          const all=NB<=(M?8:14);
+          const hiPts=all?a.map((r,i)=>r?{i,v:r.hi}:null).filter(Boolean)
+                         :pickLabels(a,r=>r.hi,true,X,gap,maxN);
+          const loPts=all?a.map((r,i)=>r?{i,v:r.lo}:null).filter(Boolean)
+                         :pickLabels(a,r=>r.lo,false,X,gap,maxN);
+          hiPts.forEach(c=>{
+            const y=Math.max(g.top+10,Y(c.v)-9);   // keep it inside the panel
+            s+=`<text class="dlabel hotlab" x="${X(c.i).toFixed(1)}" y="${y.toFixed(1)}" `
+              +`text-anchor="middle">${Math.round(c.v)}°</text>`;
+          });
+          loPts.forEach(c=>{
+            const y=Math.min(g.top+g.h-3,Y(c.v)+16);
+            s+=`<text class="dlabel coldlab" x="${X(c.i).toFixed(1)}" y="${y.toFixed(1)}" `
+              +`text-anchor="middle">${Math.round(c.v)}°</text>`;
+          });
+        }
+      }
+    }else{
+      cities.forEach(c=>{ s+=emit(A.get(c),r=>Y(r.mean),"cityline",`stroke="${c.color}"`); });
+    }
+  }
+
+  if(has("rain")){
+    if(solo){
+      if(CN){
+        const nr=CN.map((n,i)=>n&&n.pr!=null?`${X(i).toFixed(1)},${PY(n.pr).toFixed(1)}`:null).filter(Boolean);
+        if(nr.length>1) s+=`<polyline class="normalrain" points="${nr.join(" ")}"/>`;
+      }
+      const g=geom.rain, bw=Math.max(1.2,Math.min(34,iw/Math.max(NB,1)*0.7));
+      A.get(solo).forEach((r,i)=>{
+        if(!r||!r.rain) return;
+        const h=Math.max(1,g.top+g.h-PY(r.rain));
+        s+=`<rect class="bar${B[i].allFc?" fcbar":""}" x="${(X(i)-bw/2).toFixed(1)}" `
+          +`y="${(g.top+g.h-h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}"/>`;
+      });
+      {
+        // Only the wettest few — a label on every bar would bury the panel.
+        const gap=M?44:58, maxN=M?3:5, shown=[];
+        A.get(solo).map((r,i)=>({i,v:r&&r.rain})).filter(x=>x.v>0)
+          .sort((x,y)=>y.v-x.v)
+          .forEach(c=>{
+            if(shown.length>=maxN) return;
+            if(shown.every(o=>Math.abs(X(o.i)-X(c.i))>=gap)) shown.push(c);
+          });
+        shown.forEach(c=>{
+          const y=Math.max(geom.rain.top+9,PY(c.v)-6);
+          s+=`<text class="dlabel wetlab" x="${X(c.i).toFixed(1)}" y="${y.toFixed(1)}" `
+            +`text-anchor="middle">${c.v.toFixed(2)}"</text>`;
+        });
+      }
+    }else{
+      cities.forEach(c=>{ s+=emit(A.get(c),r=>PY(r.cum||0),"cityline",`stroke="${c.color}"`); });
+    }
+  }
+
+  if(showSoil){
+    const a=A.get(solo);
+    const pts=[],xs=[];
+    a.forEach((r,i)=>{ if(!r||r.soilPct==null) return;
+      xs.push(X(i)); pts.push(`${X(i).toFixed(1)},${SY(r.soilPct).toFixed(1)}`); });
+    if(pts.length>1){
+      // The gradient is positional, so the fill above the midline picks up the wet hues
+      // and the part below picks up the dry ones, with no extra logic.
+      const mid=xs.slice().reverse().map(x=>`${x.toFixed(1)},${SY(50).toFixed(1)}`);
+      s+=`<polygon class="soilfill" fill="url(#soilgrad)" points="${pts.join(" ")} ${mid.join(" ")}"/>`
+        +`<line class="midline" x1="${L}" y1="${SY(50).toFixed(1)}" x2="${W-R}" y2="${SY(50).toFixed(1)}"/>`
+        +`<polyline class="soilline" stroke="url(#soilgrad)" points="${pts.join(" ")}"/>`;
+    }
+    const ap=a.map((r,i)=>r&&r.apiPct!=null?`${X(i).toFixed(1)},${SY(r.apiPct).toFixed(1)}`:null).filter(Boolean);
+    if(ap.length>1) s+=`<polyline class="apiline" points="${ap.join(" ")}"/>`;
+  }
+
+  if(showSolar){
+    const g=geom.solar, a=A.get(solo), xs=[], sol=[];
+    a.forEach((r,i)=>{ if(!r||r.solar==null) return;
+      xs.push(X(i)); sol.push(`${X(i).toFixed(1)},${UY(r.solar).toFixed(1)}`); });
+    if(sol.length>1){
+      s+=`<polygon class="solarfill" points="${sol.join(" ")} `
+        +`${xs[xs.length-1].toFixed(1)},${(g.top+g.h).toFixed(1)} ${xs[0].toFixed(1)},${(g.top+g.h).toFixed(1)}"/>`;
+      if(CN){
+        const ns=CN.map((n,i)=>n&&n.sr!=null?`${X(i).toFixed(1)},${UY(n.sr).toFixed(1)}`:null).filter(Boolean);
+        if(ns.length>1) s+=`<polyline class="normalsolar" points="${ns.join(" ")}"/>`;
+      }
+      s+=emit(a,r=>r.solar==null?null:UY(r.solar),"solarline");
+    }
+    // UV reaches back only as far as the forecast feed's past_days window.
+    s+=emit(a,r=>r.uv==null?null:VY(r.uv),"uvline");
+  }
+
+  const TOP=geom[list[0]].top;
+
+  // Today is always marked. The selected day is a separate, brighter line that only
+  // appears once you've picked one, and it survives zooming or re-aggregating.
+  const todayB=B.findIndex(b=>b.idxs[0]<=TODAY_IDX&&b.idxs[b.idxs.length-1]>=TODAY_IDX);
+  if(todayB>=0){
+    const bx=X(todayB);
+    s+=`<line class="todayline" x1="${bx.toFixed(1)}" y1="${TOP}" x2="${bx.toFixed(1)}" y2="${BOT}"/>`
+      +(M?``:`<text class="todaylab" x="${(bx+5).toFixed(1)}" y="${TOP+11}">today</text>`);
+  }
+  const selB=selDate?B.findIndex(b=>b.first<=selDate&&b.last>=selDate):-1;
+  const selX=selB>=0?X(selB):0;
+  s+=`<line id="hr" class="hover-rule" x1="${selX.toFixed(1)}" x2="${selX.toFixed(1)}" `
+    +`y1="${TOP}" y2="${BOT}"${selB>=0?"":` style="display:none"`}/>`
+    +`<rect id="brush" class="brush" y="${TOP}" height="${BOT-TOP}" width="0" style="display:none"/>`
+    +`<rect id="hit" x="${L}" y="${TOP}" width="${iw}" height="${BOT-TOP}" fill="transparent"/>`;
+  svg.innerHTML=s;
+  svg._geom={W,L,iw,X,B,A};
+
+  // Nothing picked yet? Show today, so the app opens with useful numbers.
+  if(!selDate&&todayB>=0) renderReadout(todayB,false);
+  else if(selDate&&selB>=0) renderReadout(selB,false);
+
+  legend(solo,showSoil,showSolar,M); headline(solo); renderStats(showSoil);
+  // Must not touch anything inside #readout — renderReadout rewrites that whole subtree.
+  $("hint2").textContent=(M?"Touch the chart to read a period. Pinch with two fingers to zoom."
+                            :"Drag across the chart to zoom. Scroll to zoom, hover to read a period.")
+    +(gran==="day"?"":` Showing ${NB} ${gran}${NB===1?"":"s"}; rainfall sums, everything else averages.`)
+    +(M&&list.length===1?" One panel at a time — switch above.":"");
+  document.querySelectorAll("[data-days]").forEach(b=>
+    b.setAttribute("aria-pressed",String(+b.dataset.days===preset)));
+}
+
+function legend(solo,showSoil,showSolar,M){
+  const bits=[];
+  if(solo){
+    if(!M||activePanel==="temp"){
+      bits.push(`<span><i style="background:var(--hot)"></i>High</span>`,
+                `<span><i style="background:var(--cold)"></i>Low</span>`,
+                `<span><i style="background:var(--ink)"></i>Mean</span>`);
+      if(solo.clim) bits.push(`<span><i class="swatch"></i>Normal, 2001&ndash;2025</span>`);
+    }
+    if(!M||activePanel==="rain") bits.push(`<span><i class="block"></i>Rainfall</span>`);
+    if(showSoil){
+      bits.push(`<span>Soil <i class="grad" style="margin:0 7px"></i>dry to saturated</span>`);
+      if(solo.api) bits.push(`<span><i class="dashed" style="border-color:var(--rain)"></i>Antecedent rain index</span>`);
+    }
+    if(showSolar) bits.push(`<span><i style="background:var(--solar)"></i>Solar</span>`,
+                            `<span><i style="background:var(--uv)"></i>UV</span>`);
+  }else{
+    cities.forEach(c=>bits.push(`<span><i style="background:${c.color}"></i>${esc(c.label)}</span>`));
+  }
+  bits.push(`<span><i class="dashed"></i>Forecast</span>`,
+            `<span><i style="background:var(--today)"></i>Today</span>`);
+  if(selDate) bits.push(`<span><i style="background:var(--ink)"></i>Selected</span>`);
+  $("key").innerHTML=bits.join("");
+}
+
+function headline(solo){
+  if(solo){
+    const obs=DATES.slice(0,TODAY_IDX+1).map(t=>solo.byDate.get(t)).filter(Boolean);
+    if(!obs.length){ $("stand").textContent=`No observations for ${solo.label} yet.`; return; }
+    const warm=obs.reduce((a,b)=>b.hi>a.hi?b:a), cool=obs.reduce((a,b)=>b.lo<a.lo?b:a);
+    const ym=obs.reduce((a,b)=>a+b.mean,0)/obs.length;
+    const wet=obs.reduce((a,b)=>a+(b.pr||0),0);
+    let tail="";
+    if(solo.clim){
+      const paired=obs.filter(r=>solo.clim.get(r.date.slice(5)));
+      const dep=paired.reduce((a,r)=>a+(r.mean-solo.clim.get(r.date.slice(5)).mean),0)/paired.length;
+      const nwet=paired.reduce((a,r)=>a+(solo.clim.get(r.date.slice(5)).prRaw||0),0);
+      tail=` That runs <b>${Math.abs(dep).toFixed(1)}°F ${dep>=0?"above":"below"}</b> its 2001&ndash;2025 average`
+        +(nwet>0?`, and rainfall is <b>${Math.abs(wet-nwet).toFixed(2)}" ${wet>=nwet?"ahead of":"behind"}</b> the normal ${nwet.toFixed(2)}".`:`.`);
+    }
+    if(soilOn&&solo.soil){
+      const last=[...solo.soil.entries()].filter(([d])=>d<=OBS_END).pop();
+      if(last) tail+=` Soil at 7&ndash;28&thinsp;cm sits in the <b>${Math.round(last[1].pct)}th percentile</b> `
+        +`— <b>${wetWord(last[1].pct)}</b> against ${SOIL_FROM}&ndash;${SOIL_TO}.`;
+    }
+    $("stand").innerHTML=`<b>${esc(solo.label)}</b> — ${obs.length} observed days from 1 January, averaging `
+      +`<b>${ym.toFixed(1)}°F</b>, peaking at <b>${Math.round(warm.hi)}°F</b> on ${pretty(warm.date)} and bottoming `
+      +`at <b>${Math.round(cool.lo)}°F</b> on ${pretty(cool.date)}. Rainfall totals <b>${wet.toFixed(2)}"</b>.`+tail;
+  }else{
+    const stats=cities.map(c=>{
+      const obs=DATES.slice(0,TODAY_IDX+1).map(t=>c.byDate.get(t)).filter(Boolean);
+      return {c,mean:obs.reduce((a,b)=>a+b.mean,0)/(obs.length||1),rain:c.totalRain||0};
+    }).sort((a,b)=>b.mean-a.mean);
+    const hot=stats[0], cold=stats[stats.length-1], wettest=[...stats].sort((a,b)=>b.rain-a.rain)[0];
+    $("stand").innerHTML=`Comparing <b>${cities.length}</b> cities year to date. <b>${esc(hot.c.label)}</b> is warmest at `
+      +`<b>${hot.mean.toFixed(1)}°F</b>, <b>${esc(cold.c.label)}</b> coolest at <b>${cold.mean.toFixed(1)}°F</b>, a spread of `
+      +`<b>${(hot.mean-cold.mean).toFixed(1)}°F</b>. <b>${esc(wettest.c.label)}</b> has taken the most rain at `
+      +`<b>${wettest.rain.toFixed(2)}"</b>. Drop to one city for highs, lows, normals, soil and solar.`;
+  }
+  const solo1=cities.length===1?cities[0]:null;
+  $("src").textContent="Observations and soil: ERA5 via Open-Meteo. "
+    +((solo1&&solo1.nwsDays)?`Forecast: National Weather Service (${solo1.nwsDays} days), Open-Meteo beyond. `
+                            :"Forecast: Open-Meteo multi-model. ")
+    +"Search: Open-Meteo geocoding.";
+}
+
+/* ---------- interaction ---------- */
+(function wire(){
+  const svg=$("chart"), read=$("readout");
+  const clamp=(a,b)=>{
+    const span=b-a+1;
+    if(a<0){a=0;b=span-1;}
+    if(b>DATES.length-1){b=DATES.length-1;a=b-span+1;}
+    return {a:Math.max(0,a),b:Math.min(DATES.length-1,b)};
+  };
+  function bucketAt(clientX){
+    const g=svg._geom; if(!g) return 0;
+    const r=svg.getBoundingClientRect();
+    const px=(clientX-r.left)/r.width*g.W;
+    const i=Math.round((px-g.L)/(g.iw||1)*(g.B.length-1));
+    return Math.max(0,Math.min(g.B.length-1,i));
+  }
+  const show=i=>renderReadout(i,true);
+
+  // A bucket index maps back to the date range it covers, so zoom stays in date space.
+  const toDates=i=>{const b=svg._geom.B[i]; return [b.idxs[0],b.idxs[b.idxs.length-1]];};
+
+  let drag=null;
+  svg.addEventListener("mousedown",e=>{ if(e.target.id!=="hit") return; drag={i:bucketAt(e.clientX)}; e.preventDefault(); });
+  window.addEventListener("mousemove",e=>{
+    if(!drag){ if(e.target.id==="hit") show(bucketAt(e.clientX)); return; }
+    const g=svg._geom, br=svg.querySelector("#brush"); if(!br) return;
+    const a=g.X(drag.i), b=g.X(bucketAt(e.clientX));
+    br.setAttribute("x",Math.min(a,b).toFixed(1)); br.setAttribute("width",Math.abs(b-a).toFixed(1));
+    br.style.display="";
+  });
+  window.addEventListener("mouseup",e=>{
+    if(!drag) return;
+    const j=bucketAt(e.clientX), i0=Math.min(drag.i,j), i1=Math.max(drag.i,j);
+    const br=svg.querySelector("#brush"); if(br) br.style.display="none";
+    drag=null;
+    if(i1-i0>=1){ preset=-99; view={a:toDates(i0)[0],b:toDates(i1)[1]}; draw(); }
+  });
+  svg.addEventListener("wheel",e=>{
+    if(e.target.id!=="hit") return;
+    e.preventDefault();
+    const anchor=toDates(bucketAt(e.clientX))[0], span=view.b-view.a+1;
+    const next=Math.max(7,Math.min(DATES.length,Math.round(span*(e.deltaY>0?1.25:0.8))));
+    const frac=span<2?0.5:(anchor-view.a)/(span-1);
+    const a=Math.round(anchor-frac*(next-1));
+    preset=-99; view=clamp(a,a+next-1); draw();
+  },{passive:false});
+
+  const dist=t=>Math.abs(t[0].clientX-t[1].clientX);
+  const mid=t=>(t[0].clientX+t[1].clientX)/2;
+  let touch=null;
+  svg.addEventListener("touchstart",e=>{
+    if(e.touches.length===2){
+      e.preventDefault();
+      touch={mode:"pinch",d0:Math.max(20,dist(e.touches)),c0:mid(e.touches),v0:{...view}};
+    }else if(e.touches.length===1&&e.target.id==="hit"){
+      touch={mode:"scrub"}; show(bucketAt(e.touches[0].clientX));
+    }
+  },{passive:false});
+  svg.addEventListener("touchmove",e=>{
+    if(!touch) return;
+    if(touch.mode==="pinch"&&e.touches.length===2){
+      e.preventDefault();
+      const box=svg.getBoundingClientRect();
+      const span0=touch.v0.b-touch.v0.a+1;
+      const span=Math.max(7,Math.min(DATES.length,Math.round(span0*touch.d0/Math.max(20,dist(e.touches)))));
+      const frac=(touch.c0-box.left)/box.width;
+      const anchor=touch.v0.a+frac*(span0-1);
+      const pan=-((mid(e.touches)-touch.c0)/box.width)*span;
+      const a=Math.round(anchor-frac*(span-1)+pan);
+      preset=-99; view=clamp(a,a+span-1); draw();
+    }else if(touch.mode==="scrub"&&e.touches.length===1){
+      show(bucketAt(e.touches[0].clientX));
+    }
+  },{passive:false});
+  ["touchend","touchcancel"].forEach(ev=>svg.addEventListener(ev,()=>{touch=null;}));
+
+  $("thresh").innerHTML=HOT_CHOICES.map(v=>
+    `<option value="${v}"${v===thresh?" selected":""}>${v}°F</option>`).join("");
+  $("thresh").onchange=e=>{ thresh=+e.target.value; draw(); };
+  $("tabs").querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{
+    mode=b.dataset.mode;
+    syncButtons(); draw();
+    // The hot-days view needs the same 25-year response the normals use.
+    if(mode==="hot") maybeLoadClim();
+  });
+  $("yearpick").innerHTML=(()=>{
+    let o="";
+    for(let y=CUR_YEAR;y>=YEAR_MIN;y--) o+=`<option value="${y}"${y===year?" selected":""}>${y}</option>`;
+    return o;
+  })();
+  $("yearpick").onchange=e=>{
+    setYear(+e.target.value);
+    selDate=null;
+    syncButtons(); clearNote();
+    reloadYear();
+  };
+  $("granpick").querySelectorAll("[data-gran]").forEach(btn=>btn.onclick=()=>{
+    gran=btn.dataset.gran; syncButtons(); draw();
+  });
+  document.querySelectorAll("[data-days]").forEach(btn=>btn.onclick=()=>{
+    const d=+btn.dataset.days; preset=d;
+    if(d===0) view={a:0,b:DATES.length-1};
+    else if(d===-1) view={a:Math.max(0,TODAY_IDX-1),b:DATES.length-1};
+    else view={a:Math.max(0,TODAY_IDX-d+1),b:DATES.length-1};
+    draw();
+  });
+  $("out").onclick=()=>{
+    const span=view.b-view.a+1, next=Math.min(DATES.length,Math.round(span*1.8));
+    const c=(view.a+view.b)/2, a=Math.round(c-next/2);
+    view=clamp(a,a+next-1);
+    preset=(view.a===0&&view.b===DATES.length-1)?0:-99;
+    draw();
+  };
+  $("soilbtn").onclick=()=>{ soilOn=!soilOn; clearNote(); syncButtons(); maybeLoadSoil(); draw(); };
+  $("solarbtn").onclick=()=>{ solarOn=!solarOn; syncButtons(); draw(); };
+
+  $("dl").hidden=false;
+  $("dl").onclick=()=>{
+    // Exports at whatever aggregation is on screen.
+    const B=buildBuckets(gran);
+    const head="city,period,period_start,period_end,days,kind,mean_high_f,mean_low_f,mean_f,"
+      +"precip_in,precip_chance_pct,precip_cumulative_in,solar_kwh_m2_day,uv_index_mean,soil_percentile,antecedent_percentile";
+    const body=cities.flatMap(c=>B.map(b=>{
+      const r=aggCity(c,b); if(!r) return null;
+      return [`"${c.label}"`,b.key,b.first,b.last,r.n,
+              b.allFc?"forecast":b.anyFc?"mixed":"observed",
+              r.hi.toFixed(2),r.lo.toFixed(2),r.mean.toFixed(2),
+              r.rain==null?"":r.rain.toFixed(3), r.pop==null?"":Math.round(r.pop),
+              r.cum==null?"":r.cum.toFixed(3),
+              r.solar==null?"":r.solar.toFixed(3), r.uv==null?"":r.uv.toFixed(2),
+              r.soilPct==null?"":r.soilPct.toFixed(1), r.apiPct==null?"":r.apiPct.toFixed(1)].join(",");
+    }).filter(Boolean));
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([head+"\n"+body.join("\n")],{type:"text/csv"}));
+    a.download=`weather-${year}-${gran}.csv`; a.click();
+  };
+
+  let rt=null;
+  const relayout=()=>{clearTimeout(rt); rt=setTimeout(()=>{renderPanelPick(); draw();},150);};
+  window.addEventListener("resize",relayout);
+  window.addEventListener("orientationchange",relayout);
+  if(mq.addEventListener) mq.addEventListener("change",relayout);
+})();
+
+setYear(CUR_YEAR);
+addCity(32.2988,-90.1848,"Jackson, MS");
+</script>
