@@ -142,9 +142,9 @@ Changing these without understanding why breaks correctness, not just appearance
   isn't enough — the popup is a separate surface and will render light text on white.
   `select option` has explicit background/color.
 - **Mobile is a different layout, not a squeeze.** Below 720px the viewBox narrows to
-  380 units and panels show one at a time via `#panelpick`. The opening window is 7 days
-  on a phone and a week-plus-forecast on desktop, because the labelled circles need
-  room. Touch: one finger scrubs, two fingers pinch-zoom.
+  380 units and panels show one at a time via `#panelpick`. The opening window is 9 days
+  on a phone (yesterday, today and 7 forecast days) and a week-plus-forecast on desktop,
+  because the labelled circles need room. Touch: one finger scrubs, two fingers pinch-zoom.
 - **The condition glyph and the numbers under it can disagree on NWS days.** NWS wins
   the forecast high, low and rain chance but publishes no WMO code, so those days keep
   Open-Meteo's condition. On a marginal day that shows up as a rain glyph sitting over
