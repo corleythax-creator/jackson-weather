@@ -285,7 +285,7 @@ function setYear(y){
 }
 
 const units="&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto";
-const varsA="&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,shortwave_radiation_sum";
+const varsA="&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,shortwave_radiation_sum,weather_code";
 const varsF=varsA+",uv_index_max,precipitation_probability_max";
 const archBase="https://archive-api.open-meteo.com/v1/archive";
 
@@ -335,9 +335,10 @@ function buildBuckets(g){
 // Aggregation rules: rainfall SUMS over the period, temperature AVERAGES the daily
 // highs and lows, solar stays a per-day mean so periods of different length compare.
 function aggCity(city,b){
-  let hi=0,lo=0,mn=0,n=0, rain=0,rn=0, solar=0,sn=0, uv=0,un=0, soil=0,so=0, api=0,an=0, cum=null, pop=null;
+  let hi=0,lo=0,mn=0,n=0, rain=0,rn=0, solar=0,sn=0, uv=0,un=0, soil=0,so=0, api=0,an=0, cum=null, pop=null, wc=null;
   b.idxs.forEach(i=>{
     const r=city.byDate.get(DATES[i]); if(!r) return;
+    if(b.idxs.length===1) wc=r.wc;   // a week has no single condition to show
     hi+=r.hi; lo+=r.lo; mn+=r.mean; n++;
     if(r.pr!=null){rain+=r.pr; rn++;}
     if(r.cum!=null) cum=r.cum;                       // running total: last day wins
@@ -348,7 +349,7 @@ function aggCity(city,b){
     const ap=city.api&&city.api.pct.get(DATES[i]); if(ap!=null){api+=ap; an++;}
   });
   if(!n) return null;
-  return {n, hi:hi/n, lo:lo/n, mean:mn/n, rain:rn?rain:null, cum, pop,
+  return {n, hi:hi/n, lo:lo/n, mean:mn/n, rain:rn?rain:null, cum, pop, wc,
           solar:sn?solar/sn:null, uv:un?uv/un:null,
           soilPct:so?soil/so:null, apiPct:an?api/an:null};
 }
@@ -474,7 +475,7 @@ function absorb(city,json,tag){
     if(hi==null||lo==null||t<START||t>HORIZON) return;
     const mn=get("temperature_2m_mean",i), pr=get("precipitation_sum",i),
           sr=get("shortwave_radiation_sum",i), uv=get("uv_index_max",i),
-          pop=get("precipitation_probability_max",i);
+          pop=get("precipitation_probability_max",i), wc=get("weather_code",i);
     const prev=city.byDate.get(t);
     if(prev&&prev.src==="archive"){
       // Observed beats modelled — but UV and rain chance are absent from the
@@ -484,7 +485,7 @@ function absorb(city,json,tag){
       return;
     }
     city.byDate.set(t,{date:t,hi,lo,mean:mn==null?(hi+lo)/2:mn,pr,
-      solar:sr==null?null:sr/3.6, uv, pop, src:tag, fc:t>OBS_END});
+      solar:sr==null?null:sr/3.6, uv, pop, wc, src:tag, fc:t>OBS_END});
   });
 }
 
@@ -961,7 +962,10 @@ function renderReadout(i,select){
     const hr=svg.querySelector("#hr");
     if(hr){hr.setAttribute("x1",g.X(i).toFixed(1)); hr.setAttribute("x2",g.X(i).toFixed(1)); hr.style.display="";}
   }
+  const rec=(solo&&gran==="day")?solo.byDate.get(b.first):null;
+  const cond=(rec&&rec.wc!=null)?WMO_TEXT[rec.wc]:null;
   let html=`<div class="line"><span class="date">${b.long}</span>`
+    +(cond?`<span class="span">${cond}</span>`:``)
     +(b.allFc?`<span class="tag">forecast</span>`:b.anyFc?`<span class="tag">part forecast</span>`:``)
     +(!select&&!b.anyFc?`<span class="tag">today</span>`:``)
     +(gran==="day"?``:`<span class="span">${b.idxs.length} days</span>`)+`</div>`;
@@ -993,6 +997,79 @@ function renderReadout(i,select){
     });
   }
   read.innerHTML=html;
+}
+
+/* ---------- weather symbols ----------
+   The WMO code the daily feeds return alongside the temperatures, grouped into
+   eight drawable conditions. A day the feed gives no code for draws nothing —
+   an absent code is not a clear sky.
+   One seam worth knowing: where NWS wins the forecast it overwrites the high,
+   low and rain chance but publishes no WMO code, so those days keep Open-Meteo's
+   condition. On a marginal day the glyph and the numbers under it can disagree. */
+const WMO_TEXT={0:"Clear",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
+  45:"Fog",48:"Freezing fog",51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",
+  56:"Freezing drizzle",57:"Freezing drizzle",61:"Light rain",63:"Rain",65:"Heavy rain",
+  66:"Freezing rain",67:"Freezing rain",71:"Light snow",73:"Snow",75:"Heavy snow",
+  77:"Snow grains",80:"Light showers",81:"Showers",82:"Violent showers",
+  85:"Snow showers",86:"Snow showers",95:"Thunderstorm",96:"Thunderstorm, hail",
+  99:"Thunderstorm, hail"};
+const WMO_GLYPH=(()=>{
+  const m=new Map(), add=(codes,g)=>codes.forEach(c=>m.set(c,g));
+  add([0],"clear"); add([1,2],"partly"); add([3],"cloud"); add([45,48],"fog");
+  add([51,53,55,56,57],"drizzle"); add([61,63,65,66,67,80,81,82],"rain");
+  add([71,73,75,77,85,86],"snow"); add([95,96,99],"storm");
+  return m;                          // anything unmapped falls through to no symbol
+})();
+
+// Drawn by hand on a 24x24 box — no icon font, no dependency — then scaled into
+// place. cx is the centre of the glyph, top its upper edge.
+function weatherGlyph(kind,cx,top,size,fc){
+  const soft="var(--ink-soft)", wet="var(--rain)", warm="var(--solar)", cold="var(--cold)";
+  const cloud=(dx,dy,sc,f)=>`<g transform="translate(${dx} ${dy}) scale(${sc})" fill="${f}">`
+    +`<circle cx="9" cy="13" r="4"/><circle cx="14.8" cy="11.8" r="5"/>`
+    +`<rect x="6.6" y="12.6" width="11.6" height="5" rx="2.5"/></g>`;
+  const sun=(x,y,r,f)=>{
+    let o=`<circle cx="${x}" cy="${y}" r="${r}" fill="${f}"/>`;
+    for(let a=0;a<8;a++){
+      const t=a*Math.PI/4, dx=Math.cos(t), dy=Math.sin(t);
+      o+=`<line x1="${(x+dx*(r+1.7)).toFixed(1)}" y1="${(y+dy*(r+1.7)).toFixed(1)}" `
+        +`x2="${(x+dx*(r+3.8)).toFixed(1)}" y2="${(y+dy*(r+3.8)).toFixed(1)}" `
+        +`stroke="${f}" stroke-width="1.7" stroke-linecap="round"/>`;
+    }
+    return o;
+  };
+  // Three falling strokes, staggered so they don't read as a comb.
+  const fall=(f,w,dx,len)=>[8.5,12,15.5].map((x,i)=>{
+    const y=19+(i%2)*0.9;
+    return `<line x1="${x}" y1="${y}" x2="${(x+dx).toFixed(1)}" y2="${(y+len).toFixed(1)}" `
+      +`stroke="${f}" stroke-width="${w}" stroke-linecap="round"/>`;
+  }).join("");
+  const flakes=()=>[8.5,12,15.5].map((x,i)=>{
+    const y=20.2+(i%2)*1.3;
+    return [0,60,120].map(a=>{
+      const t=a*Math.PI/180, dx=Math.cos(t)*1.9, dy=Math.sin(t)*1.9;
+      return `<line x1="${(x-dx).toFixed(1)}" y1="${(y-dy).toFixed(1)}" `
+        +`x2="${(x+dx).toFixed(1)}" y2="${(y+dy).toFixed(1)}" `
+        +`stroke="${cold}" stroke-width="1.2" stroke-linecap="round"/>`;
+    }).join("");
+  }).join("");
+  let body;
+  switch(kind){
+    case "clear":   body=sun(12,12,4.8,warm); break;
+    case "partly":  body=sun(8.6,8.6,3.7,warm)+cloud(3.4,4.6,0.82,soft); break;
+    case "cloud":   body=cloud(0,-1,1,soft); break;
+    case "fog":     body=cloud(0,-3.5,1,soft)+[0,1,2].map(i=>
+      `<line x1="${6+(i%2)*1.6}" y1="${19.2+i*2.2}" x2="${18-(i%2)*1.6}" y2="${19.2+i*2.2}" `
+      +`stroke="${soft}" stroke-width="1.6" stroke-linecap="round"/>`).join(""); break;
+    case "drizzle": body=cloud(0,-3.5,1,soft)+fall(wet,1.5,-0.8,2.4); break;
+    case "rain":    body=cloud(0,-3.5,1,soft)+fall(wet,1.9,-1.4,4.2); break;
+    case "snow":    body=cloud(0,-3.5,1,soft)+flakes(); break;
+    case "storm":   body=cloud(0,-4.6,0.95,soft)
+      +`<polygon points="13.4,15.6 9.7,21.1 12.1,21.1 10.8,23.8 15.3,18 12.7,18" fill="${warm}"/>`; break;
+    default: return "";
+  }
+  return `<g transform="translate(${(cx-size/2).toFixed(1)} ${top.toFixed(1)}) `
+    +`scale(${(size/24).toFixed(4)})"${fc?` opacity="0.7"`:``}>${body}</g>`;
 }
 
 function draw(){
@@ -1029,7 +1106,14 @@ function draw(){
   const R=showSolar?(M?24:38):(M?8:12);
   const iw=W-L-R;
 
-  const geom={}; let y=M?12:14;
+  // A condition symbol per day in its own row above the panels. Day granularity
+  // only — a week has no single condition — one city only, and only while the
+  // glyphs have room to sit side by side without touching.
+  const symSize=M?15:17;
+  const showSym=!!solo&&gran==="day"&&(NB<2?iw:iw/(NB-1))>=symSize+3;
+
+  const geom={}; let y=M?12:14, symTop=null;
+  if(showSym){ symTop=y; y+=symSize+(M?6:8); }
   list.forEach(p=>{
     const lab=(p==="temp")?(M?20:0):(M?20:22);
     const h=M?(p==="temp"?252:210):(p==="temp"?294:p==="rain"?104:p==="soil"?88:96);
@@ -1158,6 +1242,16 @@ function draw(){
     if(i%step) return;
     s+=rule(i)+`<text x="${X(i).toFixed(1)}" y="${XLAB}" text-anchor="middle">${b.label}</text>`;
   });
+
+  /* weather symbols */
+  if(showSym){
+    const a=A.get(solo);
+    B.forEach((b,i)=>{
+      const r=a[i]; if(!r||r.wc==null) return;
+      const kind=WMO_GLYPH.get(r.wc); if(!kind) return;
+      s+=weatherGlyph(kind,X(i),symTop,symSize,b.allFc);
+    });
+  }
 
   /* series */
   if(has("temp")){

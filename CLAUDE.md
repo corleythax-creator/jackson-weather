@@ -36,6 +36,7 @@ All keyless. All free tier.
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 2001–2025 daily | one request, cached per city |
 | Soil baseline | archive, 2016–2025 **hourly** | large; fetched only on demand |
+| Daily condition | rides the archive + forecast calls | WMO `weather_code`, no extra request |
 
 **Open-Meteo's free tier is non-commercial only** and requires CC BY attribution. Fine
 for a personal dashboard; it becomes a licensing question if this ever monetises.
@@ -44,6 +45,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 
 - **Timeline tab** — temperature (high/low/mean + 25-year normal band), rainfall,
   and two optional panels: soil moisture percentile and solar/UV.
+- **Day condition symbols** — one glyph per day in a row above the panels, from the
+  WMO `weather_code` the feeds already return. Day aggregation only, one city only,
+  and only while the glyphs have room. The condition is also named in the readout.
 - **Hot days tab** — days reaching a threshold (85–110°F) by month, against the
   25-year average for that month.
 - **City search** — up to 5 cities. One city gets the full detail view; two or more
@@ -99,6 +103,15 @@ Changing these without understanding why breaks correctness, not just appearance
 - **The correlation strip always uses daily values**, whatever `gran` is set to.
   Weekly buckets would wash out the 1–2 day lags it exists to measure.
 - **Hot days excludes forecast days.** A modelled 101°F is not an observation.
+- **Condition symbols are day-only.** A week or a month has no single condition, so
+  `aggCity` carries `wc` only when the bucket is one day, and the row disappears at
+  coarser aggregation. Picking a "dominant" code would be inventing a summary the
+  feed never gave. They're also single-city — in comparison mode the glyph has no
+  unambiguous owner — and they hide once spacing drops below the glyph width.
+- **`weather_code` is not merged from the model onto an observed day.** UV and rain
+  chance are merged in `absorb()` because the archive doesn't carry them; the archive
+  *does* carry `weather_code`, so the exception doesn't apply. A day the archive gives
+  no code for draws no symbol rather than borrowing the model's.
 - **The soil gradient is `userSpaceOnUse` and vertical.** Percentile maps to y, so each
   point's colour is its own value with no path splitting. The area fill between the line
   and the 50th percentile inherits this for free.
@@ -132,6 +145,11 @@ Changing these without understanding why breaks correctness, not just appearance
   380 units and panels show one at a time via `#panelpick`. The opening window is 7 days
   on a phone and a week-plus-forecast on desktop, because the labelled circles need
   room. Touch: one finger scrubs, two fingers pinch-zoom.
+- **The condition glyph and the numbers under it can disagree on NWS days.** NWS wins
+  the forecast high, low and rain chance but publishes no WMO code, so those days keep
+  Open-Meteo's condition. On a marginal day that shows up as a rain glyph sitting over
+  a 20% chance. Mapping NWS's free-text `shortForecast` instead would trade one kind of
+  wrong for a fuzzier one.
 - **`api.weather.gov` is US-only.** Non-US points 404 on the `/points` call; the
   `try/catch` in `loadCity()` leaves the model blend in place. That is the intended
   fallback, not an error to fix.
