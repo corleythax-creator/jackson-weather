@@ -159,9 +159,15 @@
     background:#1C2A34;border:1px solid var(--rule);border-radius:2px;
     box-shadow:0 10px 30px rgba(0,0,0,.5);padding:12px 14px 14px;
   }
+  .flyout .hd{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;
+    padding-right:20px;margin:0 0 9px}
   .flyout h3{font-family:"Iowan Old Style",Palatino,Georgia,serif;font-weight:600;
-    font-size:17px;margin:0 0 2px;padding-right:22px}
-  .flyout .who{color:var(--ink-soft);font-size:12.5px;margin:0 0 9px}
+    font-size:17px;margin:0 0 2px}
+  .flyout .who{color:var(--ink-soft);font-size:12.5px;margin:0}
+  .flyout .rank{flex:none;text-align:right;color:var(--ink-soft);font-size:11px;
+    line-height:1.25;max-width:106px}
+  .flyout .rank b{display:block;color:var(--ink);font-size:20px;font-weight:600;
+    font-variant-numeric:tabular-nums;line-height:1.1}
   .flyout .now{font-size:13.5px;margin:0 0 8px}
   .flyout .now b{font-variant-numeric:tabular-nums;font-size:15px}
   .flyout .foot{color:var(--ink-soft);font-size:12.5px;margin:9px 0 0;line-height:1.45}
@@ -1039,35 +1045,55 @@ function dayHistory(city,dateISO){
   return out.length?out:null;
 }
 
-// One bar per year, low to high, with this year's pair drawn across as dashed rules.
+// One bar per historical year, low to high, then a gap and the viewed year's own
+// bar at the right end — solid when the day is observed, dashed and washed out while
+// it is still a forecast, the same signal the main chart uses. This year's high and
+// low also run across as dashed rules so every bar reads against them.
 function flyChart(rows,now,W,H){
-  const L=26,R=4,T=8,BM=16, iw=W-L-R, ih=H-T-BM;
+  // the viewed year's bar is the widest thing drawn, so it needs the right margin
+  const L=26,R=now?12:4,T=8,BM=16, iw=W-L-R, ih=H-T-BM;
   let lo=Infinity,hi=-Infinity;
   rows.forEach(r=>{lo=Math.min(lo,r.lo);hi=Math.max(hi,r.hi);});
   if(now){lo=Math.min(lo,now.lo);hi=Math.max(hi,now.hi);}
+  if(!isFinite(lo)) return "";
   const pad=Math.max(2,(hi-lo)*0.10), y0=lo-pad, y1=hi+pad;
   const Y=v=>T+ih-(v-y0)/(y1-y0)*ih;
-  const X=i=>L+(rows.length<2?iw/2:i*iw/(rows.length-1));
-  const bw=Math.max(2.5,Math.min(7,iw/Math.max(1,rows.length)*0.5));
+  const slots=rows.length+(now?2:0);            // one slot stays empty, as the gap
+  const X=i=>L+(slots<2?iw/2:i*iw/(slots-1));
+  const bw=Math.max(2.5,Math.min(7,iw/Math.max(1,slots)*0.55));
+  const bar=(x,r,w,fill,extra)=>{
+    const dot=Math.max(1.6,Math.min(2.6,w*0.34));
+    return `<rect x="${(x-w/2).toFixed(1)}" y="${Y(r.hi).toFixed(1)}" width="${w.toFixed(1)}" `
+      +`height="${Math.max(1,Y(r.lo)-Y(r.hi)).toFixed(1)}" rx="${(w/2).toFixed(1)}" `
+      +`fill="${fill}"${extra||""}/>`
+      +`<circle cx="${x.toFixed(1)}" cy="${Y(r.hi).toFixed(1)}" r="${dot.toFixed(1)}" fill="var(--hot)"/>`
+      +`<circle cx="${x.toFixed(1)}" cy="${Y(r.lo).toFixed(1)}" r="${dot.toFixed(1)}" fill="var(--cold)"/>`;
+  };
   let s="";
   [hi,lo].forEach(v=>s+=`<text x="${L-5}" y="${(Y(v)+3.5).toFixed(1)}" text-anchor="end" `
     +`font-size="10">${Math.round(v)}°</text>`);
   if(now) [[now.hi,"var(--hot)"],[now.lo,"var(--cold)"]].forEach(([v,c])=>
     s+=`<line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}" `
       +`stroke="${c}" stroke-width="1" stroke-dasharray="3 3" opacity=".75"/>`);
-  rows.forEach((r,i)=>{
-    const x=X(i), mine=now&&r.year===now.year;
-    s+=`<rect x="${(x-bw/2).toFixed(1)}" y="${Y(r.hi).toFixed(1)}" width="${bw.toFixed(1)}" `
-      +`height="${Math.max(1,Y(r.lo)-Y(r.hi)).toFixed(1)}" rx="${(bw/2).toFixed(1)}" `
-      +`fill="${mine?"var(--ink)":"rgba(190,214,220,.26)"}"/>`
-      +`<circle cx="${x.toFixed(1)}" cy="${Y(r.hi).toFixed(1)}" r="1.9" fill="var(--hot)"/>`
-      +`<circle cx="${x.toFixed(1)}" cy="${Y(r.lo).toFixed(1)}" r="1.9" fill="var(--cold)"/>`;
-  });
+  rows.forEach((r,i)=>s+=bar(X(i),r,bw,"rgba(190,214,220,.26)"));
   rows.forEach((r,i)=>{
     if(i!==0&&i!==rows.length-1&&r.year%5) return;
     s+=`<text x="${X(i).toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="10">`
       +`&rsquo;${String(r.year).slice(2)}</text>`;
   });
+  if(now){
+    const x=X(slots-1);
+    if(rows.length){
+      const gx=(X(rows.length-1)+x)/2;
+      s+=`<line x1="${gx.toFixed(1)}" y1="${T}" x2="${gx.toFixed(1)}" y2="${(T+ih).toFixed(1)}" `
+        +`stroke="var(--rule)" stroke-width="1"/>`;
+    }
+    s+=bar(x,now,bw*1.6,"var(--ink)",now.fc
+      ? ` fill-opacity=".3" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 2"`
+      : ``)
+      +`<text x="${x.toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="10" `
+      +`fill="var(--ink)">&rsquo;${String(now.year).slice(2)}</text>`;
+  }
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily high and low by year">${s}</svg>`;
 }
 
@@ -1081,11 +1107,18 @@ function openFly(i,anchorX){
   if(!fly||!g||!g.B||!g.B[i]||!solo||gran!=="day"){ closeFly(); return; }
   const date=g.B[i].first, rec=solo.byDate.get(date);
   const rows=dayHistory(solo,date);
-  const M=isMobile();
+  const hist=rows?rows.filter(r=>r.year!==year):[];
+  const n=hist.length;
+  // Ranked on the daily high, against exactly the years the averages below use.
+  const warmer=(rec&&n)?hist.filter(r=>r.hi<rec.hi).length:null;
+  const pct=warmer==null?null:Math.round(100*warmer/n);
 
   let html=`<button class="x" type="button" aria-label="Close">&times;</button>`
+    +`<div class="hd"><div>`
     +`<h3>${+date.slice(8)} ${MONTHS_FULL[+date.slice(5,7)-1]}</h3>`
-    +`<p class="who">${esc(solo.label)}</p>`;
+    +`<p class="who">${esc(solo.label)}</p></div>`
+    +(pct==null?``:`<div class="rank">Higher than<b>${pct}%</b>of years</div>`)
+    +`</div>`;
 
   if(rec) html+=`<p class="now">${year} &middot; <span class="stat max">high <b>${Math.round(rec.hi)}°</b></span>`
     +` <span class="stat min">low <b>${Math.round(rec.lo)}°</b></span>`
@@ -1095,22 +1128,17 @@ function openFly(i,anchorX){
     html+=`<p class="foot">The ${CLIM_FROM}&ndash;${CLIM_TO} archive for this city hasn't loaded, `
       +`so there's no history for this date to show.</p>`;
   }else{
-    const hist=rows.filter(r=>r.year!==year);
-    const n=hist.length;
-    html+=flyChart(rows,rec?{year,hi:rec.hi,lo:rec.lo}:null,M?312:312,116);
+    html+=flyChart(hist,rec?{year,hi:rec.hi,lo:rec.lo,fc:!!rec.fc}:null,312,120);
     if(n){
       const avgHi=hist.reduce((a,r)=>a+r.hi,0)/n, avgLo=hist.reduce((a,r)=>a+r.lo,0)/n;
       const warm=hist.reduce((a,r)=>r.hi>a.hi?r:a), cool=hist.reduce((a,r)=>r.lo<a.lo?r:a);
       html+=`<p class="foot">Across <b>${n}</b> year${n===1?"":"s"} on this date `
-        +`(${rows[0].year}&ndash;${rows[rows.length-1].year}, this year excluded), the high `
+        +`(${hist[0].year}&ndash;${hist[n-1].year}, this year excluded), the high `
         +`averaged <b>${avgHi.toFixed(1)}°</b> and the low <b>${avgLo.toFixed(1)}°</b>. `
         +`Warmest <b>${Math.round(warm.hi)}°</b> in ${warm.year}, coldest night `
-        +`<b>${Math.round(cool.lo)}°</b> in ${cool.year}.`
-        +(rec?(k=>k===0?` This year's <b>${Math.round(rec.hi)}°</b> is cooler than every one of them.`
-              :k===n?` This year's <b>${Math.round(rec.hi)}°</b> beats all <b>${n}</b>.`
-              :` This year's <b>${Math.round(rec.hi)}°</b> beats <b>${k}</b> of them.`
-          )(hist.filter(r=>r.hi<rec.hi).length):``)
-        +`</p>`;
+        +`<b>${Math.round(cool.lo)}°</b> in ${cool.year}.</p>`;
+    }else{
+      html+=`<p class="foot">The archive holds no other year on this date to compare against.</p>`;
     }
   }
   fly.innerHTML=html;

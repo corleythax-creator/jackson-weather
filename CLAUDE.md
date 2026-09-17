@@ -50,7 +50,10 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   and only while the glyphs have room. The condition is also named in the readout.
 - **Day history fly-out** — tap or click a day and a card shows that calendar date
   across the 25 years already pulled for the normals: a low-to-high bar per year,
-  this year's pair as dashed rules, and the averages, extremes and rank underneath.
+  then a gap and the viewed year's own bar (solid when observed, dashed and washed
+  out while it's still a forecast), with this year's pair also drawn across as
+  dashed rules. A "Higher than N% of years" badge sits top right, and the averages
+  and extremes underneath.
 - **Hot days tab** — days reaching a threshold (85–110°F) by month, against the
   25-year average for that month.
 - **City search** — up to 5 cities. One city gets the full detail view; two or more
@@ -121,7 +124,8 @@ Changing these without understanding why breaks correctness, not just appearance
   city) at day aggregation (a week has no one date to look up), and its summary
   excludes the viewed year — the same rule the normals and the soil percentile
   follow, so a year is never ranked against itself. If `climRaw` never arrived the
-  card says so rather than showing an empty chart.
+  card says so rather than showing an empty chart. The badge ranks the daily
+  **high** against exactly the years the averages use, so the two never disagree.
 - **`b.label` is what the x axis prints, `b.long` is the full date.** The axis shows
   the day of month alone; the readout and the fly-out carry the month. Don't collapse
   the two fields back together.
