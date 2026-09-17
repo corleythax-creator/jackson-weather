@@ -48,6 +48,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 - **Day condition symbols** — one glyph per day in a row above the panels, from the
   WMO `weather_code` the feeds already return. Day aggregation only, one city only,
   and only while the glyphs have room. The condition is also named in the readout.
+- **Day history fly-out** — tap or click a day and a card shows that calendar date
+  across the 25 years already pulled for the normals: a low-to-high bar per year,
+  this year's pair as dashed rules, and the averages, extremes and rank underneath.
 - **Hot days tab** — days reaching a threshold (85–110°F) by month, against the
   25-year average for that month.
 - **City search** — up to 5 cities. One city gets the full detail view; two or more
@@ -112,6 +115,16 @@ Changing these without understanding why breaks correctness, not just appearance
   chance are merged in `absorb()` because the archive doesn't carry them; the archive
   *does* carry `weather_code`, so the exception doesn't apply. A day the archive gives
   no code for draws no symbol rather than borrowing the model's.
+- **The fly-out reads `climRaw`, never a new request.** `dayHistory()` filters the
+  2001–2025 archive response already fetched for the normals down to one calendar
+  date. It opens only for a single city (that response is only fetched for a lone
+  city) at day aggregation (a week has no one date to look up), and its summary
+  excludes the viewed year — the same rule the normals and the soil percentile
+  follow, so a year is never ranked against itself. If `climRaw` never arrived the
+  card says so rather than showing an empty chart.
+- **`b.label` is what the x axis prints, `b.long` is the full date.** The axis shows
+  the day of month alone; the readout and the fly-out carry the month. Don't collapse
+  the two fields back together.
 - **The soil gradient is `userSpaceOnUse` and vertical.** Percentile maps to y, so each
   point's colour is its own value with no path splitting. The area fill between the line
   and the 50th percentile inherits this for free.
@@ -126,6 +139,10 @@ Changing these without understanding why breaks correctness, not just appearance
   the first hover — silently killing the soil button's handler, because the throw
   happened before `maybeLoadSoil()` ran. Data loads now fire *before* `draw()` in
   handlers for the same reason.
+- **`draw()` closes the fly-out, on purpose.** The card is anchored to a bucket's x
+  position, so any zoom, aggregation, year or tab change would leave it pointing at
+  the wrong day. It lives in `#fig` and never inside `#readout`, so the rule below
+  still holds both ways.
 - **UV and rain chance are current-year only.** They come from the forecast feed, which
   reaches ~14 days back. Past years get solar but no UV; the renderer skips null days
   rather than faking them.

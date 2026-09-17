@@ -50,7 +50,7 @@
   .chip button:hover{color:var(--ink);background:none}
   .chip.busy{opacity:.55}
 
-  figure{margin:0}
+  figure{margin:0;position:relative}
   svg{display:block;width:100%;height:auto;overflow:visible;touch-action:pan-y}
   #hit{cursor:crosshair}
   text{fill:var(--ink-soft);font-size:12px}
@@ -143,14 +143,32 @@
   .readout .line + .line{margin-top:6px}
   .readout .date{font-family:"Iowan Old Style",Palatino,Georgia,serif;font-size:19px}
   .readout .who{font-size:14px;min-width:150px}
-  .readout .tag{font-size:12px;color:var(--paper);background:var(--ink-soft);padding:2px 7px;border-radius:2px}
+  .readout .tag,.flyout .tag{font-size:12px;color:var(--paper);background:var(--ink-soft);
+    padding:2px 7px;border-radius:2px}
   .readout .span{font-size:12.5px;color:var(--ink-soft)}
-  .readout .stat{font-size:14px;color:var(--ink-soft)}
-  .readout .stat b{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .readout .stat,.flyout .stat{font-size:14px;color:var(--ink-soft)}
+  .readout .stat b,.flyout .stat b{font-size:18px;font-weight:600;
+    font-variant-numeric:tabular-nums;color:var(--ink)}
   .stat.max b{color:var(--hot)}
   .stat.min b{color:var(--cold)}
   .stat.wet b{color:var(--rain)}
   .stat.dirt b{color:var(--soil)}
+
+  .flyout{
+    position:absolute;z-index:8;width:340px;max-width:calc(100% - 16px);
+    background:#1C2A34;border:1px solid var(--rule);border-radius:2px;
+    box-shadow:0 10px 30px rgba(0,0,0,.5);padding:12px 14px 14px;
+  }
+  .flyout h3{font-family:"Iowan Old Style",Palatino,Georgia,serif;font-weight:600;
+    font-size:17px;margin:0 0 2px;padding-right:22px}
+  .flyout .who{color:var(--ink-soft);font-size:12.5px;margin:0 0 9px}
+  .flyout .now{font-size:13.5px;margin:0 0 8px}
+  .flyout .now b{font-variant-numeric:tabular-nums;font-size:15px}
+  .flyout .foot{color:var(--ink-soft);font-size:12.5px;margin:9px 0 0;line-height:1.45}
+  .flyout .foot b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .flyout .x{position:absolute;top:5px;right:5px;border:none;background:none;
+    padding:3px 8px;font-size:18px;line-height:1;color:var(--ink-soft)}
+  .flyout .x:hover{color:var(--ink);border:none}
 
   .stats{margin-top:22px;padding-top:16px;border-top:1px solid var(--rule);font-size:13.5px}
   .stats h2{font:inherit;font-weight:600;font-size:14px;margin:0 0 4px;color:var(--ink)}
@@ -206,6 +224,7 @@
     <div class="panelpick" id="panelpick" role="tablist" aria-label="Choose a panel"></div>
     <div class="readout" id="readout"><span class="stat">Hover or touch the chart to read a period.</span></div>
     <svg id="chart" viewBox="0 0 1000 512" role="img" aria-labelledby="head"></svg>
+    <div class="flyout" id="flyout" hidden></div>
     <div class="key" id="key"></div>
     <div class="controls">
       <select id="yearpick" aria-label="Year"></select>
@@ -324,8 +343,10 @@ function buildBuckets(g){
     b.allFc=b.first>OBS_END;
     b.anyFc=b.last>OBS_END;
     b.obs=b.idxs.filter(i=>i<=TODAY_IDX).length;
-    if(g==="day"){ b.label=pretty(b.first); b.long=pretty(b.first); }
-    else if(g==="week"){ b.label=pretty(b.first); b.long=`${+b.first.slice(8)}–${pretty(b.last)}`; }
+    // label is what the x axis prints — day of month alone; long is the full date,
+    // which the readout and the fly-out still show.
+    if(g==="day"){ b.label=String(+b.first.slice(8)); b.long=pretty(b.first); }
+    else if(g==="week"){ b.label=String(+b.first.slice(8)); b.long=`${+b.first.slice(8)}–${pretty(b.last)}`; }
     else { const m=+b.key.slice(5)-1; b.label=MONTHS[m]; b.long=MONTHS_FULL[m]; }
   });
   bucketCache[g]=out;
@@ -999,6 +1020,110 @@ function renderReadout(i,select){
   read.innerHTML=html;
 }
 
+/* ---------- day history fly-out ----------
+   Every number here comes from climRaw, the CLIM_FROM-CLIM_TO archive response
+   already fetched for the normals. No extra request, and nothing is shown that
+   wasn't actually pulled — if that response never arrived the card says so.
+   Summary stats leave the viewed year out, the same rule the normals and the
+   soil percentile follow, so a year is never ranked against itself. */
+function dayHistory(city,dateISO){
+  const d=city&&city.climRaw&&city.climRaw.daily;
+  if(!d||!d.time) return null;
+  const key=dateISO.slice(5), out=[];
+  d.time.forEach((t,i)=>{
+    if(t.slice(5)!==key) return;                   // 29 Feb simply finds fewer years
+    const hi=d.temperature_2m_max[i], lo=d.temperature_2m_min[i];
+    if(hi==null||lo==null) return;
+    out.push({year:+t.slice(0,4),hi,lo});
+  });
+  return out.length?out:null;
+}
+
+// One bar per year, low to high, with this year's pair drawn across as dashed rules.
+function flyChart(rows,now,W,H){
+  const L=26,R=4,T=8,BM=16, iw=W-L-R, ih=H-T-BM;
+  let lo=Infinity,hi=-Infinity;
+  rows.forEach(r=>{lo=Math.min(lo,r.lo);hi=Math.max(hi,r.hi);});
+  if(now){lo=Math.min(lo,now.lo);hi=Math.max(hi,now.hi);}
+  const pad=Math.max(2,(hi-lo)*0.10), y0=lo-pad, y1=hi+pad;
+  const Y=v=>T+ih-(v-y0)/(y1-y0)*ih;
+  const X=i=>L+(rows.length<2?iw/2:i*iw/(rows.length-1));
+  const bw=Math.max(2.5,Math.min(7,iw/Math.max(1,rows.length)*0.5));
+  let s="";
+  [hi,lo].forEach(v=>s+=`<text x="${L-5}" y="${(Y(v)+3.5).toFixed(1)}" text-anchor="end" `
+    +`font-size="10">${Math.round(v)}°</text>`);
+  if(now) [[now.hi,"var(--hot)"],[now.lo,"var(--cold)"]].forEach(([v,c])=>
+    s+=`<line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}" `
+      +`stroke="${c}" stroke-width="1" stroke-dasharray="3 3" opacity=".75"/>`);
+  rows.forEach((r,i)=>{
+    const x=X(i), mine=now&&r.year===now.year;
+    s+=`<rect x="${(x-bw/2).toFixed(1)}" y="${Y(r.hi).toFixed(1)}" width="${bw.toFixed(1)}" `
+      +`height="${Math.max(1,Y(r.lo)-Y(r.hi)).toFixed(1)}" rx="${(bw/2).toFixed(1)}" `
+      +`fill="${mine?"var(--ink)":"rgba(190,214,220,.26)"}"/>`
+      +`<circle cx="${x.toFixed(1)}" cy="${Y(r.hi).toFixed(1)}" r="1.9" fill="var(--hot)"/>`
+      +`<circle cx="${x.toFixed(1)}" cy="${Y(r.lo).toFixed(1)}" r="1.9" fill="var(--cold)"/>`;
+  });
+  rows.forEach((r,i)=>{
+    if(i!==0&&i!==rows.length-1&&r.year%5) return;
+    s+=`<text x="${X(i).toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="10">`
+      +`&rsquo;${String(r.year).slice(2)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily high and low by year">${s}</svg>`;
+}
+
+function closeFly(){ const f=$("flyout"); if(f&&!f.hidden){ f.hidden=true; f.innerHTML=""; } }
+
+// Opens only where it can say something true: one city (climRaw is fetched for a
+// lone city) and day aggregation (a week has no single date to look up).
+function openFly(i,anchorX){
+  const fly=$("flyout"), svg=$("chart"), g=svg._geom;
+  const solo=cities.length===1?cities[0]:null;
+  if(!fly||!g||!g.B||!g.B[i]||!solo||gran!=="day"){ closeFly(); return; }
+  const date=g.B[i].first, rec=solo.byDate.get(date);
+  const rows=dayHistory(solo,date);
+  const M=isMobile();
+
+  let html=`<button class="x" type="button" aria-label="Close">&times;</button>`
+    +`<h3>${+date.slice(8)} ${MONTHS_FULL[+date.slice(5,7)-1]}</h3>`
+    +`<p class="who">${esc(solo.label)}</p>`;
+
+  if(rec) html+=`<p class="now">${year} &middot; <span class="stat max">high <b>${Math.round(rec.hi)}°</b></span>`
+    +` <span class="stat min">low <b>${Math.round(rec.lo)}°</b></span>`
+    +(rec.fc?` <span class="tag">forecast</span>`:``)+`</p>`;
+
+  if(!rows){
+    html+=`<p class="foot">The ${CLIM_FROM}&ndash;${CLIM_TO} archive for this city hasn't loaded, `
+      +`so there's no history for this date to show.</p>`;
+  }else{
+    const hist=rows.filter(r=>r.year!==year);
+    const n=hist.length;
+    html+=flyChart(rows,rec?{year,hi:rec.hi,lo:rec.lo}:null,M?312:312,116);
+    if(n){
+      const avgHi=hist.reduce((a,r)=>a+r.hi,0)/n, avgLo=hist.reduce((a,r)=>a+r.lo,0)/n;
+      const warm=hist.reduce((a,r)=>r.hi>a.hi?r:a), cool=hist.reduce((a,r)=>r.lo<a.lo?r:a);
+      html+=`<p class="foot">Across <b>${n}</b> year${n===1?"":"s"} on this date `
+        +`(${rows[0].year}&ndash;${rows[rows.length-1].year}, this year excluded), the high `
+        +`averaged <b>${avgHi.toFixed(1)}°</b> and the low <b>${avgLo.toFixed(1)}°</b>. `
+        +`Warmest <b>${Math.round(warm.hi)}°</b> in ${warm.year}, coldest night `
+        +`<b>${Math.round(cool.lo)}°</b> in ${cool.year}.`
+        +(rec?(k=>k===0?` This year's <b>${Math.round(rec.hi)}°</b> is cooler than every one of them.`
+              :k===n?` This year's <b>${Math.round(rec.hi)}°</b> beats all <b>${n}</b>.`
+              :` This year's <b>${Math.round(rec.hi)}°</b> beats <b>${k}</b> of them.`
+          )(hist.filter(r=>r.hi<rec.hi).length):``)
+        +`</p>`;
+    }
+  }
+  fly.innerHTML=html;
+  fly.hidden=false;
+  fly.querySelector(".x").onclick=closeFly;
+
+  // Anchor near the tap, clamped inside the figure.
+  const fig=$("fig"), fr=fig.getBoundingClientRect();
+  const left=Math.max(8,Math.min(fr.width-fly.offsetWidth-8,anchorX-fr.left-fly.offsetWidth/2));
+  fly.style.left=left.toFixed(0)+"px";
+  fly.style.top=Math.max(4,svg.getBoundingClientRect().top-fr.top+8).toFixed(0)+"px";
+}
+
 /* ---------- weather symbols ----------
    The WMO code the daily feeds return alongside the temperatures, grouped into
    eight drawable conditions. A day the feed gives no code for draws nothing —
@@ -1073,6 +1198,7 @@ function weatherGlyph(kind,cx,top,size,fc){
 }
 
 function draw(){
+  closeFly();                 // the card is anchored to a bucket; a redraw moves it
   if(!cities.length) return;
   if(mode==="hot") return drawHot();
   const svg=$("chart"); $("fig").hidden=false;
@@ -1115,7 +1241,7 @@ function draw(){
   const geom={}; let y=M?12:14, symTop=null;
   if(showSym){ symTop=y; y+=symSize+(M?6:8); }
   list.forEach(p=>{
-    const lab=(p==="temp")?(M?20:0):(M?20:22);
+    const lab=(p==="temp")?((M&&gran!=="day")?20:0):(M?20:22);
     const h=M?(p==="temp"?252:210):(p==="temp"?294:p==="rain"?104:p==="soil"?88:96);
     y+=lab; geom[p]={top:y,h}; y+=h+(M?0:42);
   });
@@ -1168,8 +1294,10 @@ function draw(){
     for(let v=y0;v<=y1;v+=step)
       s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
         +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}°</text>`;
-    if(M||gran!=="day") s+=`<text class="panellabel" x="${L}" y="${g.top-6}">Temperature °F`
-      +(gran==="day"?``:` — mean daily high and low per ${gran}`)+`</text>`;
+    // No axis title — the ° on every tick already says what this is. The week and
+    // month wording stays, because it changes what the two lines mean.
+    if(gran!=="day") s+=`<text class="panellabel" x="${L}" y="${g.top-6}">`
+      +`Mean daily high and low per ${gran}</text>`;
   }
 
   /* rainfall */
@@ -1514,6 +1642,7 @@ function headline(solo){
     const br=svg.querySelector("#brush"); if(br) br.style.display="none";
     drag=null;
     if(i1-i0>=1){ preset=-99; view={a:toDates(i0)[0],b:toDates(i1)[1]}; draw(); }
+    else { show(j); openFly(j,e.clientX); }      // never moved off the bucket: a tap
   });
   svg.addEventListener("wheel",e=>{
     if(e.target.id!=="hit") return;
@@ -1531,9 +1660,11 @@ function headline(solo){
   svg.addEventListener("touchstart",e=>{
     if(e.touches.length===2){
       e.preventDefault();
+      closeFly();
       touch={mode:"pinch",d0:Math.max(20,dist(e.touches)),c0:mid(e.touches),v0:{...view}};
     }else if(e.touches.length===1&&e.target.id==="hit"){
-      touch={mode:"scrub"}; show(bucketAt(e.touches[0].clientX));
+      const j=bucketAt(e.touches[0].clientX);
+      touch={mode:"scrub",i0:j}; show(j);
     }
   },{passive:false});
   svg.addEventListener("touchmove",e=>{
@@ -1552,7 +1683,22 @@ function headline(solo){
       show(bucketAt(e.touches[0].clientX));
     }
   },{passive:false});
-  ["touchend","touchcancel"].forEach(ev=>svg.addEventListener(ev,()=>{touch=null;}));
+  svg.addEventListener("touchend",e=>{
+    // A tap is a scrub that never left the bucket it started on.
+    if(touch&&touch.mode==="scrub"&&e.changedTouches.length===1){
+      const t=e.changedTouches[0], j=bucketAt(t.clientX);
+      if(j===touch.i0) openFly(j,t.clientX);
+    }
+    touch=null;
+  });
+  svg.addEventListener("touchcancel",()=>{touch=null;});
+
+  // Dismiss: anywhere off the card and off the chart, or Escape.
+  document.addEventListener("click",e=>{
+    if(e.target.closest("#flyout")||e.target.closest("#chart")) return;
+    closeFly();
+  });
+  document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeFly(); });
 
   $("thresh").innerHTML=HOT_CHOICES.map(v=>
     `<option value="${v}"${v===thresh?" selected":""}>${v}°F</option>`).join("");
