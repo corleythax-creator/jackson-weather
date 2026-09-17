@@ -270,10 +270,10 @@ function setYear(y){
   DATE_POS=new Map(DATES.map((t,i)=>[t,i]));
   Object.keys(bucketCache).forEach(k=>delete bucketCache[k]);
   // Open on the last week plus the forecast — the stretch you actually care about.
-  // On a phone that's 23 points crammed into 338 units, so narrow it to 7 days there.
+  // On a phone that's 23 points crammed into 338 units, so narrow it to 9 days there.
   if(IS_CURRENT){
     if(isMobile()){
-      view={a:Math.max(0,TODAY_IDX-1),b:Math.min(DATES.length-1,TODAY_IDX+5)};
+      view={a:Math.max(0,TODAY_IDX-1),b:Math.min(DATES.length-1,TODAY_IDX+7)};
       preset=-99;                       // a custom window, so no preset button lights up
     }else{
       view={a:Math.max(0,TODAY_IDX-6),b:DATES.length-1}; preset=7;
