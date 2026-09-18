@@ -35,7 +35,7 @@ All keyless. All free tier.
 | **US forecast (authoritative)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
-| Day history (fly-out) | archive, 1940–last complete year | ~0.8 MB, two temp series; fetched only on first tap |
+| Day history (fly-out) | archive, 1940–last complete year | two temp series, in 20-year slices; fetched only on first tap |
 | Soil baseline | archive, 2016–2025 **hourly** | large; fetched only on demand |
 | Daily condition | rides the archive + forecast calls | WMO `weather_code`, no extra request |
 
@@ -128,9 +128,14 @@ Changing these without understanding why breaks correctness, not just appearance
   exactly why it is short — averaging 86 years folds a cooler mid-century into the
   reference and overstates every present-day reading. The fly-out is *descriptive*,
   so there the long record is the point.
-- **The long record is lazy, like the soil baseline.** `maybeLoadHist()` fetches
-  ~0.8 MB (two temperature series only) on the first fly-out tap, not at load, and
-  `histTried` makes it once per city per session. `dayHistory()` filters `histRaw`,
+- **The long record is lazy and sliced.** `maybeLoadHist()` runs on the first fly-out
+  tap, not at load, and `histTried` makes it once per city per session. It goes out
+  as `HIST_CHUNK`-year requests, not one 86-year span: a single span that long was
+  rejected by the live archive while the 30-year normals call beside it succeeded, so
+  each slice is kept near a size that demonstrably works. Slices settle independently
+  via `allSettled` — partial coverage beats none. Whatever failed is named in the
+  card, and the "Across N years (a–b)" line is derived from the rows that actually
+  arrived, so a short record never passes as the whole one. `dayHistory()` filters `histRaw`,
   never `climRaw`. The fly-out opens only for a single city at day aggregation, and
   its summary excludes the viewed year — the same rule the normals and the soil
   percentile follow, so a year is never ranked against itself. The badge ranks the
@@ -156,6 +161,11 @@ Changing these without understanding why breaks correctness, not just appearance
   the first hover — silently killing the soil button's handler, because the throw
   happened before `maybeLoadSoil()` ran. Data loads now fire *before* `draw()` in
   handlers for the same reason.
+- **Open-Meteo can fail with HTTP 200.** An error comes back as
+  `{error:true, reason:"…"}` in an otherwise fine response, which `grab()` sees as
+  success — it only checks `r.ok`. `maybeLoadHist()` therefore checks the *shape*
+  (`daily.time` present) as well, and keeps `reason` for the card. Anything else
+  parsing a response straight from `grab()` has the same blind spot.
 - **The fly-out repaints itself when the archive lands.** `openFly()` records
   `flyAt` and calls `maybeLoadHist()` *before* rendering, so the first paint can say
   it is loading; the fetch calls `openFly()` again on completion. A live `flyAt`

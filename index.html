@@ -453,7 +453,7 @@ async function addCity(lat,lon,label){
   if(cities.some(c=>c.key===key)){ note(`${esc(label)} is already on the chart.`); return; }
 
   const city={key,label,lat,lon,color:nextColor(),byDate:new Map(),
-              climRaw:null,clim:null,histRaw:null,histTried:false,histLoading:false,
+              climRaw:null,clim:null,histRaw:null,histTried:false,histLoading:false,histErr:null,
               soilBase:null,soil:null,api:null,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
@@ -598,16 +598,41 @@ async function maybeLoadClim(){
   if(cities.length===1&&cities[0]===c) draw();
 }
 
-// Big — about 0.8 MB — so it waits until a fly-out actually asks for it, the same
-// deal the soil baseline gets. Only the two temperature series, nothing else.
+// Waits until a fly-out actually asks for it, the same deal the soil baseline gets.
+// Goes out in HIST_CHUNK-year slices rather than one 86-year request: a single span
+// that long failed outright against the live archive, while the 30-year normals call
+// beside it succeeds, so each slice is kept near a size that demonstrably works.
+// Slices settle independently — partial coverage beats none, and whatever fails is
+// named in the card rather than silently narrowing the record.
+const HIST_CHUNK=20;
 async function maybeLoadHist(city){
   if(city.histRaw||city.histTried) return;
-  city.histTried=true; city.histLoading=true;
-  try{
-    city.histRaw=await grab(`${archBase}?latitude=${city.lat}&longitude=${city.lon}`
-      +`&start_date=${HIST_FROM}-01-01&end_date=${HIST_TO}-12-31`
-      +`&daily=temperature_2m_max,temperature_2m_min${units}`);
-  }catch(e){ city.histRaw=null; }
+  city.histTried=true; city.histLoading=true; city.histErr=null;
+  const spans=[];
+  for(let a=HIST_FROM;a<=HIST_TO;a+=HIST_CHUNK) spans.push([a,Math.min(HIST_TO,a+HIST_CHUNK-1)]);
+  const res=await Promise.allSettled(spans.map(([a,b])=>
+    grab(`${archBase}?latitude=${city.lat}&longitude=${city.lon}`
+      +`&start_date=${a}-01-01&end_date=${b}-12-31`
+      +`&daily=temperature_2m_max,temperature_2m_min${units}`)));
+  const time=[], hi=[], lo=[], bad=[];
+  res.forEach((r,k)=>{
+    const v=r.status==="fulfilled"?r.value:null;
+    const d=v&&v.daily;
+    if(!d||!d.time){
+      // A 200 carrying {error:true,reason:…} looks like success to grab(), so the
+      // shape is checked here too and the reason kept.
+      const why=r.status==="rejected"?r.reason.message:(v&&v.reason)||"no daily series";
+      bad.push(`${spans[k][0]}\u2013${spans[k][1]} (${why})`);
+      return;
+    }
+    d.time.forEach((t,i)=>{
+      const x=d.temperature_2m_max[i], n=d.temperature_2m_min[i];
+      if(x==null||n==null) return;
+      time.push(t); hi.push(x); lo.push(n);
+    });
+  });
+  city.histRaw=time.length?{daily:{time,temperature_2m_max:hi,temperature_2m_min:lo}}:null;
+  city.histErr=bad.length?bad.join("; "):null;
   city.histLoading=false;
   // Repaint the card if it is still open on the same day — closeFly clears flyAt,
   // and every redraw closes it, so a live flyAt means the bucket index still holds.
@@ -1166,7 +1191,8 @@ function openFly(i,anchorX){
     html+=`<p class="foot">`+(solo.histLoading
       ? `Reading the ${HIST_FROM}&ndash;${HIST_TO} archive&hellip;`
       : `The ${HIST_FROM}&ndash;${HIST_TO} archive for this city didn't load, so there's `
-        +`no history for this date to show.`)+`</p>`;
+        +`no history for this date to show.`
+        +(solo.histErr?` <code>${esc(solo.histErr)}</code>`:``))+`</p>`;
   }else{
     html+=flyChart(hist,rec?{year,hi:rec.hi,lo:rec.lo,fc:!!rec.fc}:null,312,120);
     if(n){
@@ -1180,6 +1206,9 @@ function openFly(i,anchorX){
     }else{
       html+=`<p class="foot">The archive holds no other year on this date to compare against.</p>`;
     }
+    // Never let a partial record pass as the whole thing.
+    if(solo.histErr) html+=`<p class="foot">Part of the record is missing, so the years `
+      +`above are what loaded: <code>${esc(solo.histErr)}</code></p>`;
   }
   fly.innerHTML=html;
   fly.hidden=false;
