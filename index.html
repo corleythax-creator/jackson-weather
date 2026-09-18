@@ -500,7 +500,9 @@ async function reloadYear(){
   const list=cities.slice();
   list.forEach(c=>{ c.clim=null; c.climTried=false; });
   await Promise.all(list.map(c=>loadCity(c)));
-  if(cities.length){ draw(); maybeLoadClim(); maybeLoadSoil(); }
+  if(cities.length){ maybeLoadClim(); maybeLoadSoil();
+    if(mode==="hot") maybeLoadHist(cities.length===1?cities[0]:null);
+    draw(); }
 }
 
 function absorb(city,json,tag){
@@ -606,7 +608,7 @@ async function maybeLoadClim(){
 // named in the card rather than silently narrowing the record.
 const HIST_CHUNK=20;
 async function maybeLoadHist(city){
-  if(city.histRaw||city.histTried) return;
+  if(!city||city.histRaw||city.histTried) return;
   city.histTried=true; city.histLoading=true; city.histErr=null;
   const spans=[];
   for(let a=HIST_FROM;a<=HIST_TO;a+=HIST_CHUNK) spans.push([a,Math.min(HIST_TO,a+HIST_CHUNK-1)]);
@@ -634,9 +636,11 @@ async function maybeLoadHist(city){
   city.histRaw=time.length?{daily:{time,temperature_2m_max:hi,temperature_2m_min:lo}}:null;
   city.histErr=bad.length?bad.join("; "):null;
   city.histLoading=false;
+  if(cities.length!==1||cities[0]!==city) return;
   // Repaint the card if it is still open on the same day — closeFly clears flyAt,
   // and every redraw closes it, so a live flyAt means the bucket index still holds.
-  if(flyAt&&cities.length===1&&cities[0]===city) openFly(flyAt.i,flyAt.anchorX);
+  if(flyAt) openFly(flyAt.i,flyAt.anchorX);
+  else if(mode==="hot") draw();          // the record years arrived; redraw with them
 }
 
 function calendarKeys(){
@@ -922,12 +926,43 @@ function hotNormal(city){
   return out.map(v=>v/years.size);
 }
 
+// The dashed monthly average is a 30-year normal; the record years come from the
+// whole archive, the way a forecast quotes "normal high 86, record 100 in 2010".
+// histRaw carries daily max, which is all a hot-day count needs. Ties are reported
+// as ties rather than silently picking one year.
+function hotExtremes(city){
+  const d=city&&city.histRaw&&city.histRaw.daily;
+  if(!d||!d.time) return null;
+  const per=new Map();
+  d.time.forEach((t,i)=>{
+    const v=d.temperature_2m_max[i]; if(v==null) return;
+    const y=+t.slice(0,4); if(y===year) return;      // never rank a year against itself
+    let a=per.get(y); if(!a){ a=new Array(12).fill(0); per.set(y,a); }
+    if(v>=thresh) a[+t.slice(5,7)-1]++;
+  });
+  if(!per.size) return null;
+  let hot=null, cold=null;
+  per.forEach((months,y)=>{
+    const total=months.reduce((a,b)=>a+b,0);
+    // On a tie keep the most recent year, and count how many share the mark.
+    if(!hot||total>hot.total||(total===hot.total&&y>hot.year)) hot={year:y,months,total};
+    if(!cold||total<cold.total||(total===cold.total&&y>cold.year)) cold={year:y,months,total};
+  });
+  const ties=t=>[...per.values()].filter(ms=>ms.reduce((a,b)=>a+b,0)===t).length;
+  hot.ties=ties(hot.total); cold.ties=ties(cold.total);
+  return {hot,cold,years:per.size};
+}
+
 function drawHot(){
   const svg=$("chart"); $("fig").hidden=false;
   const M=isMobile();
   const solo=cities.length===1?cities[0]:null;
   const counts=cities.map(c=>({c,months:hotByMonth(c)}));
   const norm=solo?hotNormal(solo):null;
+  const ext=solo?hotExtremes(solo):null;
+  const rec=(ext&&ext.hot.total>0)?ext:null;   // nothing to draw if no year ever reached it
+  // A coldest year of zero every month draws nothing, so it is never announced.
+  const coldDrawn=!!(rec&&rec.cold.months.some(v=>v>0));
 
   const W=M?380:1000, L=M?30:44, R=M?8:12, T=M?26:30, BH=M?230:300;
   const iw=W-L-R, XLAB=T+BH+22, H=XLAB+(M?16:20);
@@ -936,6 +971,7 @@ function drawHot(){
   let ymax=1;
   counts.forEach(s=>s.months.forEach(v=>{ if(v) ymax=Math.max(ymax,v.days); }));
   if(norm) norm.forEach(v=>ymax=Math.max(ymax,v));
+  if(rec) rec.hot.months.forEach(v=>ymax=Math.max(ymax,v));
   ymax=Math.max(4,Math.ceil(ymax/2)*2);
   const Y=v=>T+BH-(v/ymax)*BH;
   const slot=iw/12;
@@ -951,7 +987,7 @@ function drawHot(){
 
   const n=cities.length, gap=slot*0.18, bw=(slot-gap*2)/n;
   MONTHS.forEach((mn,m)=>{
-    const x0=L+slot*m+gap;
+    const x0=L+slot*m+gap, wSlot=slot-gap*2;
     counts.forEach((sr,ci)=>{
       const v=sr.months[m];
       if(!v) return;                                   // month not reached yet
@@ -968,6 +1004,16 @@ function drawHot(){
         s+=`<text x="${(x+bw/2).toFixed(1)}" y="${(T+BH+11).toFixed(1)}" text-anchor="middle" `
           +`fill="var(--ink-soft)" font-size="9">${v.obs}d</text>`;
     });
+    // Outlines go over the bars, not behind: a record year BELOW the viewed year is
+    // the interesting case, and behind a solid bar it would be invisible. They carry
+    // no fill, so the bar still reads as the subject.
+    if(rec) [[rec.hot.months[m],"var(--hot)"],[rec.cold.months[m],"var(--cold)"]].forEach(([v,col])=>{
+      if(!v) return;
+      const h=T+BH-Y(v);
+      s+=`<rect x="${x0.toFixed(1)}" y="${(T+BH-h).toFixed(1)}" width="${wSlot.toFixed(1)}" `
+        +`height="${h.toFixed(1)}" fill="none" stroke="${col}" stroke-width="1.1" `
+        +`stroke-dasharray="3 2" opacity=".85"/>`;
+    });
     if(norm&&norm[m]>0.05){
       const y=Y(norm[m]);
       s+=`<line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x0+slot-gap*2).toFixed(1)}" `
@@ -981,7 +1027,17 @@ function drawHot(){
   $("key").innerHTML=(n===1
       ? `<span><i style="background:var(--hot)"></i>Days at or above ${thresh}°F</span>`
       : cities.map(c=>`<span><i style="background:${c.color}"></i>${esc(c.label)}</span>`).join(""))
-    +(norm?`<span><i class="dashed"></i>Typical for the month, ${CLIM_FROM}&ndash;${CLIM_TO}</span>`:``);
+    +(norm?`<span><i class="dashed"></i>Typical for the month, ${CLIM_FROM}&ndash;${CLIM_TO}</span>`:``)
+    // Name a year only when one year actually holds the mark, and don't advertise a
+    // coldest-year outline that is zero every month and therefore never drawn.
+    +(rec?`<span><i class="dashed" style="border-color:var(--hot)"></i>`
+        +(rec.hot.ties>1?`Hottest, ${rec.hot.total} days (${rec.hot.ties} years tied)`
+                        :`Hottest year, ${rec.hot.year} (${rec.hot.total})`)+`</span>`
+      +(coldDrawn
+        ?`<span><i class="dashed" style="border-color:var(--cold)"></i>`
+          +(rec.cold.ties>1?`Fewest, ${rec.cold.total} days (${rec.cold.ties} years tied)`
+                           :`Coldest year, ${rec.cold.year} (${rec.cold.total})`)+`</span>`
+        :``):``);
 
   const total=counts.map(sr=>({label:sr.c.label,
     n:sr.months.reduce((a,v)=>a+(v?v.days:0),0)}));
@@ -994,13 +1050,22 @@ function drawHot(){
       +(worst.m>=0?`, most of them in <b>${MONTHS_FULL[worst.m]}</b> (${worst.v}).`:` so far.`)
       +(nt!=null?` A typical year at this location sees <b>${nt.toFixed(1)}</b> such days, `
         +`averaged over ${CLIM_FROM}&ndash;${CLIM_TO}.`:``)
+      +(ext?` Across <b>${ext.years}</b> years of archive, `
+        +(ext.hot.ties>1?`as many as <b>${ext.hot.total}</b>, most recently in <b>${ext.hot.year}</b>`
+                        :`the most was <b>${ext.hot.total}</b> in <b>${ext.hot.year}</b>`)
+        +` and `
+        +(ext.cold.ties>1?`as few as <b>${ext.cold.total}</b>, in <b>${ext.cold.ties}</b> separate years.`
+                         :`the fewest <b>${ext.cold.total}</b> in <b>${ext.cold.year}</b>.`)
+        :``)
       +(IS_CURRENT?` Forecast days are excluded — observations only.`:``);
   }else{
     $("stand").innerHTML=`Days reaching <b>${thresh}°F</b> in ${year}: `
       +total.sort((a,b)=>b.n-a.n).map(t=>`<b>${esc(t.label)}</b> ${t.n}`).join(", ")+`.`;
   }
   $("hint2").textContent="Small grey figures mark months with partial data. "
-    +"Dashed rules show the long-run average for that month.";
+    +`Dashed rules show the ${CLIM_FROM}\u2013${CLIM_TO} average for that month`
+    +(rec?`; the outlines are the ${coldDrawn?"hottest and coldest years":"hottest year"} `
+      +`in the ${HIST_FROM}\u2013${HIST_TO} archive.`:`.`);
   $("stats").hidden=true;
   $("readout").innerHTML=`<span class="stat">Counting daily highs at or above `
     +`<b>${thresh}°F</b>, observed days only.</span>`;
@@ -1802,9 +1867,10 @@ function headline(solo){
   $("thresh").onchange=e=>{ thresh=+e.target.value; draw(); };
   $("tabs").querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{
     mode=b.dataset.mode;
+    // Loads fire before draw(), never after — see CLAUDE.md. The hot-days view wants
+    // the normals response for its monthly average and the long archive for records.
+    if(mode==="hot"){ maybeLoadClim(); maybeLoadHist(cities.length===1?cities[0]:null); }
     syncButtons(); draw();
-    // The hot-days view needs the same 25-year response the normals use.
-    if(mode==="hot") maybeLoadClim();
   });
   $("yearpick").innerHTML=(()=>{
     let o="";

@@ -56,7 +56,8 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   dashed rules. A "Higher than N% of years" badge sits top right, and the averages
   and extremes underneath.
 - **Hot days tab** — days reaching a threshold (85–110°F) by month, against the
-  25-year average for that month.
+  30-year average for that month, plus dashed outlines for the hottest and coldest
+  years in the full archive, named with their annual totals in the key.
 - **City search** — up to 5 cities. One city gets the full detail view; two or more
   switches to comparison (mean lines + cumulative rainfall).
 - **Year picker** — 2000 to current year.
@@ -141,6 +142,18 @@ Changing these without understanding why breaks correctness, not just appearance
   percentile follow, so a year is never ranked against itself. The badge ranks the
   daily **high** against exactly the years the averages use, so the two never
   disagree.
+- **The hot-days record years come from `histRaw`, the average from `climRaw`.**
+  `hotExtremes()` ranks whole years by their annual count at the current threshold
+  over 1940–last complete year, while the dashed monthly rule stays the 1991–2020
+  average — the way a forecast quotes "normal high 86, record 100 in 2010". Both
+  windows are named in the hint text because they differ. The viewed year is
+  excluded, ties keep the most recent year *and* report how many share the mark, a
+  threshold no year ever reached draws nothing, and a coldest year that is zero every
+  month is never announced in the key because it has no outline to point at.
+- **Record outlines paint over the bars, not behind them.** A record year lower than
+  the viewed year is the interesting case, and behind a solid bar it is invisible.
+  They carry no fill, so the bar still reads as the subject. Verified: of the
+  overlapping outline/bar pairs, none is painted underneath.
 - **Baseline years are never written as literals in UI strings.** They were twice,
   in the key and in the standfirst, and both silently kept saying 2001–2025 after
   the window moved. Interpolate the constants.
