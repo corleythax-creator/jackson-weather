@@ -103,10 +103,15 @@ Changing these without understanding why breaks correctness, not just appearance
   actually returned; days after it but on or before today are marked `est` — kept,
   because they are the best estimate available, but flagged, because they are not
   measurements. `est` days are excluded from the observed-day tally and the hot-day
-  count, tagged in the readout, drawn with the forecast styling, and `applyNws()` is
-  allowed to overwrite them. Using "today" as the boundary instead put a modelled
-  high on today's headline figure and blocked NWS from correcting it — an 11°F error
-  in the reproduction.
+  count, tagged in the readout, and drawn with the forecast styling. They are still
+  the numbers on screen, because they are the best estimate available — the flag is
+  about provenance, not suppression.
+- **NWS still does not overwrite today, only tomorrow onward.** Today's model figure
+  is an analysis of a day largely already elapsed; NWS's "today" period is a forecast
+  issued that morning. Measured on 18 Sep 2026, the model had 99°F and that is what
+  Jackson reached. An earlier change let NWS take today on the theory that a
+  non-observation should defer to NWS; it was reverted, because "not measured" does
+  not mean "worse".
 - **Observed beats modelled.** Where archive and forecast overlap, the archive wins —
   *except* UV index and precipitation probability, which the archive doesn't carry, so
   they're merged onto the archive record. See `absorb()`.

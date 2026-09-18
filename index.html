@@ -564,10 +564,13 @@ async function nwsForecast(lat,lon){
 function applyNws(city,nws){
   let n=0;
   nws.forEach((v,d)=>{
-    // Never overwrite an observation — but "observation" means a day the archive
-    // actually published, not merely a day in the past. Today and the ERA5 lag days
-    // are model estimates, and NWS is the better number for them.
-    if(city.obsEnd&&d<=city.obsEnd) return;
+    // Never overwrite an observation, and never today either. Today's model figure
+    // is an analysis of a day that has largely already happened, while NWS's "today"
+    // period is a forecast issued this morning — by evening the analysis is the
+    // better number. NWS takes over from tomorrow. (Measured on 18 Sep 2026: the
+    // model had 99°F and that is what it reached.) The ERA5 lag days before today
+    // are moot here, since NWS does not publish the past.
+    if(d<=OBS_END) return;
     const r=city.byDate.get(d); if(!r) return;
     if(v.hi!=null){ r.hi=v.hi; n++; }
     if(v.lo!=null) r.lo=v.lo;
@@ -648,7 +651,12 @@ async function maybeLoadHist(city){
   });
   city.histRaw=time.length
     ?{daily:{time,temperature_2m_max:hi,temperature_2m_min:lo,precipitation_sum:pr}}:null;
-  city.histErr=bad.length?bad.join("; "):null;
+  // A wall of identical 429s reads as a broken archive; it is a rate limit, and it
+  // clears on its own. Say that instead of repeating the same line five times.
+  city.histErr=!bad.length?null
+    :bad.every(b=>/\b429\b/.test(b))
+      ?`Open-Meteo is rate-limiting this browser (429) — the archive should load again shortly`
+      :bad.join("; ");
   city.histLoading=false;
   if(cities.length!==1||cities[0]!==city) return;
   // Repaint the card if it is still open on the same day — closeFly clears flyAt,
