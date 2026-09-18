@@ -615,8 +615,8 @@ async function maybeLoadHist(city){
   const res=await Promise.allSettled(spans.map(([a,b])=>
     grab(`${archBase}?latitude=${city.lat}&longitude=${city.lon}`
       +`&start_date=${a}-01-01&end_date=${b}-12-31`
-      +`&daily=temperature_2m_max,temperature_2m_min${units}`)));
-  const time=[], hi=[], lo=[], bad=[];
+      +`&daily=temperature_2m_max,temperature_2m_min,precipitation_sum${units}`)));
+  const time=[], hi=[], lo=[], pr=[], bad=[];
   res.forEach((r,k)=>{
     const v=r.status==="fulfilled"?r.value:null;
     const d=v&&v.daily;
@@ -631,16 +631,18 @@ async function maybeLoadHist(city){
       const x=d.temperature_2m_max[i], n=d.temperature_2m_min[i];
       if(x==null||n==null) return;
       time.push(t); hi.push(x); lo.push(n);
+      pr.push(d.precipitation_sum?d.precipitation_sum[i]:null);
     });
   });
-  city.histRaw=time.length?{daily:{time,temperature_2m_max:hi,temperature_2m_min:lo}}:null;
+  city.histRaw=time.length
+    ?{daily:{time,temperature_2m_max:hi,temperature_2m_min:lo,precipitation_sum:pr}}:null;
   city.histErr=bad.length?bad.join("; "):null;
   city.histLoading=false;
   if(cities.length!==1||cities[0]!==city) return;
   // Repaint the card if it is still open on the same day — closeFly clears flyAt,
   // and every redraw closes it, so a live flyAt means the bucket index still holds.
   if(flyAt) openFly(flyAt.i,flyAt.anchorX);
-  else if(mode==="hot") draw();          // the record years arrived; redraw with them
+  else draw();                           // the record years arrived; redraw with them
 }
 
 function calendarKeys(){
@@ -951,6 +953,43 @@ function hotExtremes(city){
   const ties=t=>[...per.values()].filter(ms=>ms.reduce((a,b)=>a+b,0)===t).length;
   hot.ties=ties(hot.total); cold.ties=ties(cold.total);
   return {hot,cold,years:per.size};
+}
+
+// Wettest and driest whole years by annual total, from the same archive the hot-day
+// records use. Only the two winners get a calendar map built; keeping one per year
+// would be 86 maps for no reason.
+function rainExtremes(city){
+  const d=city&&city.histRaw&&city.histRaw.daily;
+  if(!d||!d.time||!d.precipitation_sum) return null;
+  const tot=new Map();
+  d.time.forEach((t,i)=>{
+    const v=d.precipitation_sum[i]; if(v==null) return;
+    const y=+t.slice(0,4); if(y===year) return;     // never rank a year against itself
+    tot.set(y,(tot.get(y)||0)+v);
+  });
+  if(!tot.size) return null;
+  let wet=null, dry=null;
+  tot.forEach((v,y)=>{
+    if(!wet||v>wet.total||(v===wet.total&&y>wet.year)) wet={year:y,total:v};
+    if(!dry||v<dry.total||(v===dry.total&&y>dry.year)) dry={year:y,total:v};
+  });
+  const keyed=y=>{
+    const m=new Map();
+    d.time.forEach((t,i)=>{
+      if(+t.slice(0,4)!==y) return;
+      const v=d.precipitation_sum[i]; if(v!=null) m.set(t.slice(5),v);
+    });
+    return m;
+  };
+  wet.byKey=keyed(wet.year); dry.byKey=keyed(dry.year);
+  return {wet,dry,years:tot.size};
+}
+// A bucket's worth of a record year, matched on month-day. 29 February is simply
+// absent in a non-leap record year, which is a missing day rather than a dry one.
+function bucketSum(map,b){
+  let t=0,n=0;
+  b.idxs.forEach(i=>{ const v=map.get(DATES[i].slice(5)); if(v!=null){t+=v; n++;} });
+  return n?t:null;
 }
 
 function drawHot(){
@@ -1417,6 +1456,13 @@ function draw(){
   const A=new Map(cities.map(c=>[c,B.map(b=>aggCity(c,b))]));
   const CN=(solo&&solo.clim)?B.map(b=>aggClim(solo.clim,b)):null;
 
+  // Wettest and driest years on the rain panel, the same encoding the Hot days tab
+  // uses. Day aggregation is excluded on purpose: one specific year's rainfall on
+  // one date is noise, unlike the ±7-day-smoothed normal it would sit next to.
+  const rainRec=(solo&&gran!=="day")?rainExtremes(solo):null;
+  const wetB=rainRec?B.map(b=>bucketSum(rainRec.wet.byKey,b)):null;
+  const dryB=rainRec?B.map(b=>bucketSum(rainRec.dry.byKey,b)):null;
+
   // Split at the first fully-forecast bucket, overlapping by one so lines join.
   let firstFc=B.findIndex(b=>b.allFc);
   const boundary=firstFc===-1?NB-1:Math.max(0,firstFc-1);
@@ -1470,6 +1516,7 @@ function draw(){
     if(solo){
       A.get(solo).forEach(r=>{ if(r&&r.rain!=null) pmax=Math.max(pmax,r.rain); });
       if(CN) CN.forEach(n=>{ if(n&&n.pr!=null) pmax=Math.max(pmax,n.pr); });
+      if(wetB) wetB.forEach(v=>{ if(v!=null) pmax=Math.max(pmax,v); });
       pmax=gran==="day"?Math.max(0.25,Math.ceil(pmax*4)/4):Math.max(1,Math.ceil(pmax));
     }else{
       cities.forEach(c=>A.get(c).forEach(r=>{ if(r&&r.cum!=null) pmax=Math.max(pmax,r.cum); }));
@@ -1615,6 +1662,17 @@ function draw(){
         s+=`<rect class="bar${B[i].allFc?" fcbar":""}" x="${(X(i)-bw/2).toFixed(1)}" `
           +`y="${(g.top+g.h-h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}"/>`;
       });
+      // Over the bars, not behind: a record year drier than this one is the
+      // interesting case and a filled bar would hide it.
+      if(rainRec) B.forEach((b,i)=>{
+        [[wetB[i],"var(--cold)"],[dryB[i],"var(--soil)"]].forEach(([v,col])=>{
+          if(!v) return;
+          const h=Math.max(1,g.top+g.h-PY(v));
+          s+=`<rect x="${(X(i)-bw/2).toFixed(1)}" y="${(g.top+g.h-h).toFixed(1)}" `
+            +`width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="none" stroke="${col}" `
+            +`stroke-width="1.1" stroke-dasharray="3 2" opacity=".85"/>`;
+        });
+      });
       {
         // Only the wettest few — a label on every bar would bury the panel.
         const gap=M?44:58, maxN=M?3:5, shown=[];
@@ -1692,7 +1750,7 @@ function draw(){
   if(!selDate&&todayB>=0) renderReadout(todayB,false);
   else if(selDate&&selB>=0) renderReadout(selB,false);
 
-  legend(solo,showSoil,showSolar,M); headline(solo); renderStats(showSoil);
+  legend(solo,showSoil,showSolar,M,rainRec); headline(solo); renderStats(showSoil);
   // Must not touch anything inside #readout — renderReadout rewrites that whole subtree.
   $("hint2").textContent=(M?"Touch the chart to read a period. Pinch with two fingers to zoom."
                             :"Drag across the chart to zoom. Scroll to zoom, hover to read a period.")
@@ -1702,7 +1760,7 @@ function draw(){
     b.setAttribute("aria-pressed",String(+b.dataset.days===preset)));
 }
 
-function legend(solo,showSoil,showSolar,M){
+function legend(solo,showSoil,showSolar,M,rainRec){
   const bits=[];
   if(solo){
     if(!M||activePanel==="temp"){
@@ -1712,6 +1770,11 @@ function legend(solo,showSoil,showSolar,M){
       if(solo.clim) bits.push(`<span><i class="swatch"></i>Normal, ${CLIM_FROM}&ndash;${CLIM_TO}</span>`);
     }
     if(!M||activePanel==="rain") bits.push(`<span><i class="block"></i>Rainfall</span>`);
+    if(rainRec&&(!M||activePanel==="rain")) bits.push(
+      `<span><i class="dashed" style="border-color:var(--cold)"></i>`
+        +`Wettest year, ${rainRec.wet.year} (${rainRec.wet.total.toFixed(1)}")</span>`,
+      `<span><i class="dashed" style="border-color:var(--soil)"></i>`
+        +`Driest, ${rainRec.dry.year} (${rainRec.dry.total.toFixed(1)}")</span>`);
     if(showSoil){
       bits.push(`<span>Soil <i class="grad" style="margin:0 7px"></i>dry to saturated</span>`);
       if(solo.api) bits.push(`<span><i class="dashed" style="border-color:var(--rain)"></i>Antecedent rain index</span>`);
@@ -1884,7 +1947,11 @@ function headline(solo){
     reloadYear();
   };
   $("granpick").querySelectorAll("[data-gran]").forEach(btn=>btn.onclick=()=>{
-    gran=btn.dataset.gran; syncButtons(); draw();
+    gran=btn.dataset.gran;
+    // Week and month are where the rain records are drawn, so pull them here rather
+    // than at load. Fires before draw(), never after — see CLAUDE.md.
+    if(gran!=="day") maybeLoadHist(cities.length===1?cities[0]:null);
+    syncButtons(); draw();
   });
   document.querySelectorAll("[data-days]").forEach(btn=>btn.onclick=()=>{
     const d=+btn.dataset.days; preset=d;

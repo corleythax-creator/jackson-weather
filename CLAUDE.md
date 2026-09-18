@@ -35,7 +35,7 @@ All keyless. All free tier.
 | **US forecast (authoritative)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
-| Day history (fly-out) | archive, 1940–last complete year | two temp series, in 20-year slices; fetched only on first tap |
+| Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation |
 | Soil baseline | archive, 2016–2025 **hourly** | large; fetched only on demand |
 | Daily condition | rides the archive + forecast calls | WMO `weather_code`, no extra request |
 
@@ -58,6 +58,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 - **Hot days tab** — days reaching a threshold (85–110°F) by month, against the
   30-year average for that month, plus dashed outlines for the hottest and coldest
   years in the full archive, named with their annual totals in the key.
+- **Rainfall records** — the same encoding on the Timeline's rain panel: dashed
+  outlines for the wettest and driest years in the full archive, at week and month
+  aggregation only.
 - **City search** — up to 5 cities. One city gets the full detail view; two or more
   switches to comparison (mean lines + cumulative rainfall).
 - **Year picker** — 2000 to current year.
@@ -150,6 +153,13 @@ Changing these without understanding why breaks correctness, not just appearance
   excluded, ties keep the most recent year *and* report how many share the mark, a
   threshold no year ever reached draws nothing, and a coldest year that is zero every
   month is never announced in the key because it has no outline to point at.
+- **Rain records are hidden at day aggregation.** `rainExtremes()` is only consulted
+  when `gran !== "day"`. One specific year's rainfall on one calendar date is noise —
+  the normal it would sit beside is defensible only because it is smoothed ±7 days
+  across 30 years, and a single record year gets no such smoothing. Week and month
+  totals are real quantities, so it draws there. `bucketSum()` matches on month-day,
+  so 29 February missing from a non-leap record year is a *missing* day, not a dry
+  one, and a bucket with no matching dates returns null rather than zero.
 - **Record outlines paint over the bars, not behind them.** A record year lower than
   the viewed year is the interesting case, and behind a solid bar it is invisible.
   They carry no fill, so the bar still reads as the subject. Verified: of the
