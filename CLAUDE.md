@@ -35,7 +35,7 @@ All keyless. All free tier.
 | **US forecast (authoritative)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
-| Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation |
+| Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation, then cached in `localStorage` (~380 KB) so it is pulled once per browser rather than once per load |
 | Soil baseline | archive, 2016–2025 **hourly** | large; fetched only on demand |
 | Daily condition | rides the archive + forecast calls | WMO `weather_code`, no extra request |
 
@@ -160,6 +160,19 @@ Changing these without understanding why breaks correctness, not just appearance
   percentile follow, so a year is never ranked against itself. The badge ranks the
   daily **high** against exactly the years the averages use, so the two never
   disagree.
+- **The long record is cached in `localStorage`, and only when complete.** Three
+  triggers each firing five slice requests on every page load got the live archive
+  answering 429. The record does not change, so `cacheHist()`/`cachedHist()` keep it
+  per browser under `jw:hist:<v>:<lat,lon>:<from>-<to>`; a warm load makes **zero**
+  archive requests for it. Rules that matter: a partial pull is never cached, or a
+  rate-limited gap would freeze in instead of being retried next visit; values are
+  stored verbatim, because rounding to 1dp saved ~50 KB but could nudge 99.96 to
+  100.0 and count a hot day that never happened; values are aligned to a day index
+  from `HIST_FROM`, so the date array costs nothing; the key carries `HIST_TO`, so
+  the turn of the year invalidates it by itself. Every `localStorage` touch is
+  wrapped — it throws in private mode, and on quota the code evicts its own other
+  entries, retries once, then gives up quietly. Verified: blocked storage, quota
+  exceeded and a corrupt entry all fall back to fetching with no page error.
 - **The hot-days record years come from `histRaw`, the average from `climRaw`.**
   `hotExtremes()` ranks whole years by their annual count at the current threshold
   over 1940–last complete year, while the dashed monthly rule stays the 1991–2020

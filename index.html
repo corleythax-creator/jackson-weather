@@ -615,6 +615,68 @@ async function maybeLoadClim(){
   if(cities.length===1&&cities[0]===c) draw();
 }
 
+/* ---------- archive cache ----------
+   The 1940-onwards record does not change, so fetching it once per browser rather
+   than once per page load is the difference between working and being rate limited
+   — the live archive started answering 429 once three separate triggers each fired
+   five slice requests on every reload.
+   Values are stored aligned to a day index counted from HIST_FROM, so the date
+   array costs nothing to keep. Only a *complete* pull is cached: caching a partial
+   one would freeze a rate-limited gap in place instead of retrying it later.
+   Every localStorage touch is wrapped — it throws in private mode and when the
+   origin has storage blocked, and the feature has to survive that. */
+const HIST_CACHE_V=1, HIST_MAX_AGE=30*864e5;     // ERA5 is revised occasionally
+const histKey=city=>`jw:hist:${HIST_CACHE_V}:${city.key}:${HIST_FROM}-${HIST_TO}`;
+const dayIdx=t=>Math.round((Date.UTC(+t.slice(0,4),+t.slice(5,7)-1,+t.slice(8,10))
+  -Date.UTC(HIST_FROM,0,1))/864e5);
+const dayISO=i=>new Date(Date.UTC(HIST_FROM,0,1)+i*864e5).toISOString().slice(0,10);
+const HIST_DAYS=dayIdx(`${HIST_TO}-12-31`)+1;
+
+function packHist(raw){
+  // Stored exactly as returned, not rounded. Rounding to 1dp shaved ~50KB but could
+  // nudge a value across a hot-day threshold — 99.96 becoming 100.0 counts a day
+  // that never reached it. The archive already answers in tenths, so there is
+  // nothing to save anyway.
+  const d=raw.daily, x=new Array(HIST_DAYS).fill(null), n=x.slice(), p=x.slice();
+  const v=a=>a==null?null:a;
+  d.time.forEach((t,i)=>{
+    const k=dayIdx(t); if(k<0||k>=HIST_DAYS) return;
+    x[k]=v(d.temperature_2m_max[i]); n[k]=v(d.temperature_2m_min[i]);
+    p[k]=v(d.precipitation_sum?d.precipitation_sum[i]:null);
+  });
+  return {v:HIST_CACHE_V,at:Date.now(),x,n,p};
+}
+function unpackHist(o){
+  const time=[],hi=[],lo=[],pr=[];
+  for(let k=0;k<HIST_DAYS;k++){
+    if(o.x[k]==null||o.n[k]==null) continue;
+    time.push(dayISO(k)); hi.push(o.x[k]); lo.push(o.n[k]); pr.push(o.p[k]);
+  }
+  return time.length
+    ?{daily:{time,temperature_2m_max:hi,temperature_2m_min:lo,precipitation_sum:pr}}:null;
+}
+function cachedHist(city){
+  try{
+    const raw=localStorage.getItem(histKey(city)); if(!raw) return null;
+    const o=JSON.parse(raw);
+    if(!o||o.v!==HIST_CACHE_V||!o.x||!(Date.now()-o.at<HIST_MAX_AGE)) return null;
+    return unpackHist(o);
+  }catch(e){ return null; }
+}
+function cacheHist(city,raw){
+  const write=()=>localStorage.setItem(histKey(city),JSON.stringify(packHist(raw)));
+  try{ write(); }
+  catch(e){
+    // Out of room: drop this app's other entries and try once, then give up quietly.
+    // Failing to cache is not failing to work.
+    try{
+      Object.keys(localStorage).filter(k=>k.startsWith("jw:hist:")&&k!==histKey(city))
+        .forEach(k=>localStorage.removeItem(k));
+      write();
+    }catch(e2){}
+  }
+}
+
 // Waits until a fly-out actually asks for it, the same deal the soil baseline gets.
 // Goes out in HIST_CHUNK-year slices rather than one 86-year request: a single span
 // that long failed outright against the live archive, while the 30-year normals call
@@ -624,7 +686,12 @@ async function maybeLoadClim(){
 const HIST_CHUNK=20;
 async function maybeLoadHist(city){
   if(!city||city.histRaw||city.histTried) return;
-  city.histTried=true; city.histLoading=true; city.histErr=null;
+  city.histTried=true; city.histErr=null;
+  // A hit is assigned before the first await, so callers that render straight after
+  // calling this see the data on the same tick and never flash a loading line.
+  const hit=cachedHist(city);
+  if(hit){ city.histRaw=hit; return; }
+  city.histLoading=true;
   const spans=[];
   for(let a=HIST_FROM;a<=HIST_TO;a+=HIST_CHUNK) spans.push([a,Math.min(HIST_TO,a+HIST_CHUNK-1)]);
   const res=await Promise.allSettled(spans.map(([a,b])=>
@@ -657,6 +724,9 @@ async function maybeLoadHist(city){
     :bad.every(b=>/\b429\b/.test(b))
       ?`Open-Meteo is rate-limiting this browser (429) — the archive should load again shortly`
       :bad.join("; ");
+  // Only a complete pull is worth keeping — caching a rate-limited partial would
+  // freeze the gap in instead of retrying it on the next visit.
+  if(city.histRaw&&!bad.length) cacheHist(city,city.histRaw);
   city.histLoading=false;
   if(cities.length!==1||cities[0]!==city) return;
   // Repaint the card if it is still open on the same day — closeFly clears flyAt,
