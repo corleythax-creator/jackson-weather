@@ -265,7 +265,11 @@
 
 <script>
 const FC_DAYS=16, MAX_CITIES=5, YEAR_MIN=2000;
-const CLIM_FROM=2001, CLIM_TO=2025, SMOOTH=7;
+// The normals window is the WMO standard 30 years, which is also what NWS and the
+// consumer apps quote — so "vs normal" here matches what you'd read elsewhere. It is
+// deliberately NOT the full record: climate drifts, and averaging 86 years would fold
+// a cooler mid-century into the reference and overstate every present-day reading.
+const CLIM_FROM=1991, CLIM_TO=2020, SMOOTH=7;
 const SOIL_BAND="soil_moisture_7_to_28cm", SOIL_FROM=2016, SOIL_TO=2025, SOIL_WIN=7;
 const SOIL_STOPS=[[0,"#C2542B"],[30,"#C89A55"],[50,"#8E9C93"],[70,"#4E9FAA"],[100,"#3B8AC4"]];
 const DECAYS=[0.80,0.85,0.90,0.93,0.95,0.97];
@@ -277,6 +281,10 @@ const wetWord=p=>p<10?"very dry":p<30?"dry":p<70?"normal":p<90?"wet":"saturated"
 
 const iso=d=>[d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");
 const NOW=iso(new Date()), CUR_YEAR=+NOW.slice(0,4);
+// The fly-out's day history is descriptive, not a baseline, so it takes the whole
+// record ERA5 offers — 1940 is the archive floor. Last complete year only, so a
+// part-finished year never sits among the whole ones.
+const HIST_FROM=1940, HIST_TO=CUR_YEAR-1;
 const bucketCache={};
 
 // Everything downstream is keyed off these; changing year rebuilds them.
@@ -445,7 +453,8 @@ async function addCity(lat,lon,label){
   if(cities.some(c=>c.key===key)){ note(`${esc(label)} is already on the chart.`); return; }
 
   const city={key,label,lat,lon,color:nextColor(),byDate:new Map(),
-              climRaw:null,clim:null,soilBase:null,soil:null,api:null,loading:true,id:++seq};
+              climRaw:null,clim:null,histRaw:null,histTried:false,histLoading:false,
+              soilBase:null,soil:null,api:null,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
   if(cities.includes(city)){ maybeLoadClim(); maybeLoadSoil(); }
@@ -587,6 +596,22 @@ async function maybeLoadClim(){
   }catch(e){ c.clim=null; }
   $("fig").classList.remove("pending");
   if(cities.length===1&&cities[0]===c) draw();
+}
+
+// Big — about 0.8 MB — so it waits until a fly-out actually asks for it, the same
+// deal the soil baseline gets. Only the two temperature series, nothing else.
+async function maybeLoadHist(city){
+  if(city.histRaw||city.histTried) return;
+  city.histTried=true; city.histLoading=true;
+  try{
+    city.histRaw=await grab(`${archBase}?latitude=${city.lat}&longitude=${city.lon}`
+      +`&start_date=${HIST_FROM}-01-01&end_date=${HIST_TO}-12-31`
+      +`&daily=temperature_2m_max,temperature_2m_min${units}`);
+  }catch(e){ city.histRaw=null; }
+  city.histLoading=false;
+  // Repaint the card if it is still open on the same day — closeFly clears flyAt,
+  // and every redraw closes it, so a live flyAt means the bucket index still holds.
+  if(flyAt&&cities.length===1&&cities[0]===city) openFly(flyAt.i,flyAt.anchorX);
 }
 
 function calendarKeys(){
@@ -1027,13 +1052,13 @@ function renderReadout(i,select){
 }
 
 /* ---------- day history fly-out ----------
-   Every number here comes from climRaw, the CLIM_FROM-CLIM_TO archive response
-   already fetched for the normals. No extra request, and nothing is shown that
-   wasn't actually pulled — if that response never arrived the card says so.
+   Every number here comes from histRaw, the HIST_FROM-HIST_TO archive response,
+   fetched on the first tap and kept for the session. Nothing is shown that wasn't
+   actually pulled — if that response never arrived the card says so.
    Summary stats leave the viewed year out, the same rule the normals and the
    soil percentile follow, so a year is never ranked against itself. */
 function dayHistory(city,dateISO){
-  const d=city&&city.climRaw&&city.climRaw.daily;
+  const d=city&&city.histRaw&&city.histRaw.daily;
   if(!d||!d.time) return null;
   const key=dateISO.slice(5), out=[];
   d.time.forEach((t,i)=>{
@@ -1060,9 +1085,12 @@ function flyChart(rows,now,W,H){
   const Y=v=>T+ih-(v-y0)/(y1-y0)*ih;
   const slots=rows.length+(now?2:0);            // one slot stays empty, as the gap
   const X=i=>L+(slots<2?iw/2:i*iw/(slots-1));
-  const bw=Math.max(2.5,Math.min(7,iw/Math.max(1,slots)*0.55));
-  const bar=(x,r,w,fill,extra)=>{
-    const dot=Math.max(1.6,Math.min(2.6,w*0.34));
+  const sp=slots<2?iw:iw/(slots-1);
+  const bw=Math.max(1.4,Math.min(7,sp*0.55));
+  // Dots must clear their neighbours, so they shrink with the spacing. Across the
+  // full record they end up small and the bar itself carries the range.
+  const bar=(x,r,w,fill,extra,dotR)=>{
+    const dot=dotR||Math.max(0.9,Math.min(2.6,Math.min(w*0.34,sp*0.40)));
     return `<rect x="${(x-w/2).toFixed(1)}" y="${Y(r.hi).toFixed(1)}" width="${w.toFixed(1)}" `
       +`height="${Math.max(1,Y(r.lo)-Y(r.hi)).toFixed(1)}" rx="${(w/2).toFixed(1)}" `
       +`fill="${fill}"${extra||""}/>`
@@ -1076,11 +1104,17 @@ function flyChart(rows,now,W,H){
     s+=`<line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}" `
       +`stroke="${c}" stroke-width="1" stroke-dasharray="3 3" opacity=".75"/>`);
   rows.forEach((r,i)=>s+=bar(X(i),r,bw,"rgba(190,214,220,.26)"));
+  const ystep=rows.length>40?10:5, GAP=22, kept=[];
+  const rlim=now?X(slots-1)-GAP:Infinity;      // keep clear of the current-year label
   rows.forEach((r,i)=>{
-    if(i!==0&&i!==rows.length-1&&r.year%5) return;
-    s+=`<text x="${X(i).toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="10">`
-      +`&rsquo;${String(r.year).slice(2)}</text>`;
+    const end=(i===0||i===rows.length-1);
+    if(!end&&r.year%ystep) return;
+    if(X(i)>rlim) return;
+    if(!kept.length||X(i)-X(kept[kept.length-1])>=GAP) kept.push(i);
+    else if(end) kept[kept.length-1]=i;         // an end label outranks a decade tick
   });
+  kept.forEach(i=>s+=`<text x="${X(i).toFixed(1)}" y="${H-3}" text-anchor="middle" `
+    +`font-size="10">&rsquo;${String(rows[i].year).slice(2)}</text>`);
   if(now){
     const x=X(slots-1);
     if(rows.length){
@@ -1088,16 +1122,18 @@ function flyChart(rows,now,W,H){
       s+=`<line x1="${gx.toFixed(1)}" y1="${T}" x2="${gx.toFixed(1)}" y2="${(T+ih).toFixed(1)}" `
         +`stroke="var(--rule)" stroke-width="1"/>`;
     }
-    s+=bar(x,now,bw*1.6,"var(--ink)",now.fc
+    const nw=Math.max(4,bw*1.6);
+    s+=bar(x,now,nw,"var(--ink)",now.fc
       ? ` fill-opacity=".3" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 2"`
-      : ``)
+      : ``,Math.min(2.6,Math.max(1.3,nw*0.4)))
       +`<text x="${x.toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="10" `
       +`fill="var(--ink)">&rsquo;${String(now.year).slice(2)}</text>`;
   }
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily high and low by year">${s}</svg>`;
 }
 
-function closeFly(){ const f=$("flyout"); if(f&&!f.hidden){ f.hidden=true; f.innerHTML=""; } }
+let flyAt=null;                 // {i,anchorX} while a card is open, else null
+function closeFly(){ flyAt=null; const f=$("flyout"); if(f&&!f.hidden){ f.hidden=true; f.innerHTML=""; } }
 
 // Opens only where it can say something true: one city (climRaw is fetched for a
 // lone city) and day aggregation (a week has no single date to look up).
@@ -1106,6 +1142,8 @@ function openFly(i,anchorX){
   const solo=cities.length===1?cities[0]:null;
   if(!fly||!g||!g.B||!g.B[i]||!solo||gran!=="day"){ closeFly(); return; }
   const date=g.B[i].first, rec=solo.byDate.get(date);
+  flyAt={i,anchorX};
+  maybeLoadHist(solo);            // fires before the render, never after — see CLAUDE.md
   const rows=dayHistory(solo,date);
   const hist=rows?rows.filter(r=>r.year!==year):[];
   const n=hist.length;
@@ -1125,8 +1163,10 @@ function openFly(i,anchorX){
     +(rec.fc?` <span class="tag">forecast</span>`:``)+`</p>`;
 
   if(!rows){
-    html+=`<p class="foot">The ${CLIM_FROM}&ndash;${CLIM_TO} archive for this city hasn't loaded, `
-      +`so there's no history for this date to show.</p>`;
+    html+=`<p class="foot">`+(solo.histLoading
+      ? `Reading the ${HIST_FROM}&ndash;${HIST_TO} archive&hellip;`
+      : `The ${HIST_FROM}&ndash;${HIST_TO} archive for this city didn't load, so there's `
+        +`no history for this date to show.`)+`</p>`;
   }else{
     html+=flyChart(hist,rec?{year,hi:rec.hi,lo:rec.lo,fc:!!rec.fc}:null,312,120);
     if(n){
@@ -1575,7 +1615,7 @@ function legend(solo,showSoil,showSolar,M){
       bits.push(`<span><i style="background:var(--hot)"></i>High</span>`,
                 `<span><i style="background:var(--cold)"></i>Low</span>`,
                 `<span><i style="background:var(--ink)"></i>Mean</span>`);
-      if(solo.clim) bits.push(`<span><i class="swatch"></i>Normal, 2001&ndash;2025</span>`);
+      if(solo.clim) bits.push(`<span><i class="swatch"></i>Normal, ${CLIM_FROM}&ndash;${CLIM_TO}</span>`);
     }
     if(!M||activePanel==="rain") bits.push(`<span><i class="block"></i>Rainfall</span>`);
     if(showSoil){
@@ -1605,7 +1645,7 @@ function headline(solo){
       const paired=obs.filter(r=>solo.clim.get(r.date.slice(5)));
       const dep=paired.reduce((a,r)=>a+(r.mean-solo.clim.get(r.date.slice(5)).mean),0)/paired.length;
       const nwet=paired.reduce((a,r)=>a+(solo.clim.get(r.date.slice(5)).prRaw||0),0);
-      tail=` That runs <b>${Math.abs(dep).toFixed(1)}°F ${dep>=0?"above":"below"}</b> its 2001&ndash;2025 average`
+      tail=` That runs <b>${Math.abs(dep).toFixed(1)}°F ${dep>=0?"above":"below"}</b> its ${CLIM_FROM}&ndash;${CLIM_TO} average`
         +(nwet>0?`, and rainfall is <b>${Math.abs(wet-nwet).toFixed(2)}" ${wet>=nwet?"ahead of":"behind"}</b> the normal ${nwet.toFixed(2)}".`:`.`);
     }
     if(soilOn&&solo.soil){

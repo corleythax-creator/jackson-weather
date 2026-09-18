@@ -34,7 +34,8 @@ All keyless. All free tier.
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
 | **US forecast (authoritative)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
-| Temperature/rain/solar normals | archive, 2001–2025 daily | one request, cached per city |
+| Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
+| Day history (fly-out) | archive, 1940–last complete year | ~0.8 MB, two temp series; fetched only on first tap |
 | Soil baseline | archive, 2016–2025 **hourly** | large; fetched only on demand |
 | Daily condition | rides the archive + forecast calls | WMO `weather_code`, no extra request |
 
@@ -49,7 +50,7 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   WMO `weather_code` the feeds already return. Day aggregation only, one city only,
   and only while the glyphs have room. The condition is also named in the readout.
 - **Day history fly-out** — tap or click a day and a card shows that calendar date
-  across the 25 years already pulled for the normals: a low-to-high bar per year,
+  across the whole ERA5 record, 1940 to the last complete year: a low-to-high bar per year,
   then a gap and the viewed year's own bar (solid when observed, dashed and washed
   out while it's still a forecast), with this year's pair also drawn across as
   dashed rules. A "Higher than N% of years" badge sits top right, and the averages
@@ -118,14 +119,26 @@ Changing these without understanding why breaks correctness, not just appearance
   chance are merged in `absorb()` because the archive doesn't carry them; the archive
   *does* carry `weather_code`, so the exception doesn't apply. A day the archive gives
   no code for draws no symbol rather than borrowing the model's.
-- **The fly-out reads `climRaw`, never a new request.** `dayHistory()` filters the
-  2001–2025 archive response already fetched for the normals down to one calendar
-  date. It opens only for a single city (that response is only fetched for a lone
-  city) at day aggregation (a week has no one date to look up), and its summary
-  excludes the viewed year — the same rule the normals and the soil percentile
-  follow, so a year is never ranked against itself. If `climRaw` never arrived the
-  card says so rather than showing an empty chart. The badge ranks the daily
-  **high** against exactly the years the averages use, so the two never disagree.
+- **The normals window and the history window are deliberately different.** Normals,
+  the band and the hot-day average use `CLIM_FROM`–`CLIM_TO` = 1991–2020: the WMO
+  standard 30 years, which is also what NWS and the consumer apps quote, so "vs
+  normal" here matches what a user reads elsewhere. The fly-out's day history uses
+  `HIST_FROM`–`HIST_TO` = 1940 to the last complete year, the whole ERA5 record.
+  Do not collapse them. A 30-year window is a *baseline*, and climate drift is
+  exactly why it is short — averaging 86 years folds a cooler mid-century into the
+  reference and overstates every present-day reading. The fly-out is *descriptive*,
+  so there the long record is the point.
+- **The long record is lazy, like the soil baseline.** `maybeLoadHist()` fetches
+  ~0.8 MB (two temperature series only) on the first fly-out tap, not at load, and
+  `histTried` makes it once per city per session. `dayHistory()` filters `histRaw`,
+  never `climRaw`. The fly-out opens only for a single city at day aggregation, and
+  its summary excludes the viewed year — the same rule the normals and the soil
+  percentile follow, so a year is never ranked against itself. The badge ranks the
+  daily **high** against exactly the years the averages use, so the two never
+  disagree.
+- **Baseline years are never written as literals in UI strings.** They were twice,
+  in the key and in the standfirst, and both silently kept saying 2001–2025 after
+  the window moved. Interpolate the constants.
 - **`b.label` is what the x axis prints, `b.long` is the full date.** The axis shows
   the day of month alone; the readout and the fly-out carry the month. Don't collapse
   the two fields back together.
@@ -143,6 +156,11 @@ Changing these without understanding why breaks correctness, not just appearance
   the first hover — silently killing the soil button's handler, because the throw
   happened before `maybeLoadSoil()` ran. Data loads now fire *before* `draw()` in
   handlers for the same reason.
+- **The fly-out repaints itself when the archive lands.** `openFly()` records
+  `flyAt` and calls `maybeLoadHist()` *before* rendering, so the first paint can say
+  it is loading; the fetch calls `openFly()` again on completion. A live `flyAt`
+  means no redraw happened, so the bucket index is still valid — `closeFly()` clears
+  it and every redraw closes the card.
 - **`draw()` closes the fly-out, on purpose.** The card is anchored to a bucket's x
   position, so any zoom, aggregation, year or tab change would leave it pointing at
   the wrong day. It lives in `#fig` and never inside `#readout`, so the rule below
