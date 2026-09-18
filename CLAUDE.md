@@ -97,6 +97,16 @@ Changing these without understanding why breaks correctness, not just appearance
   hot against NWS for Jackson, which is what a user compares against. `applyNws()`
   overwrites forecast highs, lows and rain chance for the ~7 days NWS publishes;
   Open-Meteo fills days 8–16. NWS never overwrites an observation.
+- **"Observed" means the archive published it, not that the date is past.** ERA5 runs
+  about five days behind, so the archive answers for today with nulls and the forecast
+  feed's `past_days` window fills them. `city.obsEnd` is the last date the archive
+  actually returned; days after it but on or before today are marked `est` — kept,
+  because they are the best estimate available, but flagged, because they are not
+  measurements. `est` days are excluded from the observed-day tally and the hot-day
+  count, tagged in the readout, drawn with the forecast styling, and `applyNws()` is
+  allowed to overwrite them. Using "today" as the boundary instead put a modelled
+  high on today's headline figure and blocked NWS from correcting it — an 11°F error
+  in the reproduction.
 - **Observed beats modelled.** Where archive and forecast overlap, the archive wins —
   *except* UV index and precipitation probability, which the archive doesn't carry, so
   they're merged onto the archive record. See `absorb()`.
@@ -201,6 +211,12 @@ Changing these without understanding why breaks correctness, not just appearance
 - **UV and rain chance are current-year only.** They come from the forecast feed, which
   reaches ~14 days back. Past years get solar but no UV; the renderer skips null days
   rather than faking them.
+- **ERA5 rainfall is a modelled field, not a gauge reading.** It is the reanalysis
+  model's own precipitation on a ~31 km cell, so it produces light-rain days that a
+  rain gauge in that cell would call dry, and it will disagree with what you saw out
+  of the window. This is inherent to the source, not a bug to fix; it is stated in the
+  footer so the caveat travels with the numbers. The same applies to soil moisture
+  below, and it is why the rainfall/soil correlation is partly circular.
 - **Soil moisture is the least trustworthy field here.** It's a model state variable
   responding to the model's own rainfall, not an observation, and it depends on how ERA5
   parameterises soil type at that grid cell. Read the percentile, not the raw m³/m³, and
