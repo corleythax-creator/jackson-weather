@@ -155,9 +155,17 @@
     background:linear-gradient(90deg,#3B8AC4,#4E9FAA,#8E9C93,#C89A55,#C2542B)}
   .msland{fill:rgba(190,214,220,.05);stroke:var(--rule);stroke-width:1.2;
     stroke-linejoin:round}
+  /* Roads are context, not data — they sit under the markers and must never compete
+     with the temperature ramp for attention. */
+  .msroad{fill:none;stroke:#3F5764;stroke-width:1;stroke-linejoin:round;
+    stroke-linecap:round}
+  .msroad.i{stroke:#587787;stroke-width:1.7}
+  .msshield rect{fill:#16212A;stroke:#3F5764}
+  .msshield.i rect{stroke:#587787}
+  .msshield text{fill:#93A8B1;font-size:8.5px;font-weight:600;letter-spacing:.01em}
   .msdot{cursor:pointer}
-  .msdot circle{stroke:var(--paper);stroke-width:1.4}
-  .msdot:hover circle,.msdot.sel circle{stroke:var(--ink);stroke-width:2}
+  .msdot circle{stroke:var(--paper);stroke-width:2.2}
+  .msdot:hover circle,.msdot.sel circle{stroke:var(--ink);stroke-width:2.8}
   .msname{fill:var(--ink-soft);font-size:10.5px}
   .msdot.sel .msname{fill:var(--ink)}
   .mslo{fill:var(--ink-soft);font-size:9.5px}
@@ -462,6 +470,35 @@ const MS_CITIES=[
   {name:"Greenwood",  lat:33.5162, lon:-90.1795},
   {name:"Grenada",    lat:33.7690, lon:-89.8081},
 ].sort((a,b)=>b.lat-a.lat);
+// Major routes, [lon,lat] along each centreline, traced by hand at the same rough
+// resolution as the outline — enough to place a city against a road, not enough to
+// navigate by. Interstates carry i:true and are drawn a shade brighter. Eastern
+// endpoints are pulled just inside MS_OUTLINE so a road never runs off the land.
+const MS_ROADS=[
+  {id:"I-55",i:1,pts:[[-90.01,34.99],[-89.99,34.82],[-89.97,34.62],[-89.94,34.31],
+    [-89.81,33.77],[-89.73,33.48],[-89.85,33.08],[-90.04,32.61],[-90.18,32.30],
+    [-90.36,31.99],[-90.44,31.58],[-90.45,31.24],[-90.47,31.00]]},
+  {id:"I-20",i:1,pts:[[-90.90,32.32],[-90.18,32.30],[-89.47,32.36],[-89.16,32.32],
+    [-88.70,32.36],[-88.46,32.38]]},
+  {id:"I-59",i:1,pts:[[-89.66,30.52],[-89.53,30.84],[-89.29,31.33],[-89.13,31.69],
+    [-88.82,32.17],[-88.70,32.36]]},
+  {id:"I-10",i:1,pts:[[-89.57,30.27],[-89.39,30.34],[-89.09,30.42],[-88.89,30.44],
+    [-88.56,30.43],[-88.41,30.41]]},
+  {id:"I-22",i:1,pts:[[-89.70,34.93],[-89.45,34.77],[-89.00,34.49],[-88.70,34.26],
+    [-88.31,34.27]]},
+  {id:"US 61",pts:[[-90.09,34.99],[-90.38,34.68],[-90.57,34.20],[-90.72,33.74],
+    [-90.90,33.40],[-90.85,33.17],[-90.88,32.90],[-90.88,32.35],[-90.98,31.96],
+    [-91.40,31.56],[-91.44,31.02]]},
+  {id:"US 45",pts:[[-88.52,34.93],[-88.57,34.66],[-88.70,34.26],[-88.55,33.83],
+    [-88.43,33.50],[-88.56,33.11],[-88.70,32.36],[-88.64,31.68],[-88.46,31.05]]},
+  {id:"US 49",pts:[[-89.09,30.40],[-89.14,30.86],[-89.29,31.33],[-89.56,31.64],
+    [-89.87,31.96],[-90.18,32.30],[-90.41,32.85],[-90.49,33.18],[-90.65,33.45],
+    [-90.55,33.72],[-90.57,34.20],[-90.62,34.46]]},
+  {id:"US 82",pts:[[-91.06,33.41],[-90.65,33.45],[-90.18,33.52],[-89.73,33.49],
+    [-88.82,33.45],[-88.43,33.50],[-88.39,33.48]]},
+  {id:"US 84",pts:[[-91.40,31.56],[-90.44,31.58],[-90.11,31.55],[-89.56,31.64],
+    [-89.13,31.69],[-88.64,31.68],[-88.475,31.63]]},
+];
 const MS_DAYS=7;
 // A simplified Mississippi boundary, [lon,lat], clockwise from the north-west corner:
 // the 35th parallel across the top, the Alabama line down the east, the coast and the
@@ -1751,8 +1788,10 @@ function drawMsMap(rows,date){
   const col=v=>{ const f=hi>lo?(v-lo)/(hi-lo):0.5;
     const [r,g,b]=ramp(f*100,TEMP_STOPS); return `rgb(${r},${g},${b})`; };
 
-  let s=`<polygon class="msland" points="`
+  const land=`<polygon class="msland" points="`
     +MS_OUTLINE.map(([ln,lt])=>`${P.x(ln).toFixed(1)},${P.y(lt).toFixed(1)}`).join(" ")+`"/>`;
+  const roads=MS_ROADS.map(r=>`<polyline class="msroad${r.i?" i":""}" points="`
+    +r.pts.map(([ln,lt])=>`${P.x(ln).toFixed(1)},${P.y(lt).toFixed(1)}`).join(" ")+`"/>`).join("");
 
   // Four Delta cities sit within about fifty pixels of each other, so a fixed label
   // side puts names straight through neighbouring markers. Each name takes the first
@@ -1780,6 +1819,32 @@ function drawMsMap(rows,date){
     boxes.push({x1:p.lab.b.x1-pad,y1:p.lab.b.y1-pad,x2:p.lab.b.x2+pad,y2:p.lab.b.y2+pad});
   });
 
+  // Shields go on last and give way to everything: they are placed against the
+  // markers and the city names already down, and a route whose badge cannot find a
+  // clear spot simply keeps its line and loses its label. Candidates walk the
+  // interior vertices and the midpoints between them, so a long route has plenty.
+  let shields="";
+  MS_ROADS.forEach(r=>{
+    const xy=r.pts.map(([ln,lt])=>[P.x(ln),P.y(lt)]);
+    const cand=[];
+    for(let i=1;i<xy.length-1;i++) cand.push(xy[i]);
+    for(let i=0;i<xy.length-1;i++)
+      cand.push([(xy[i][0]+xy[i+1][0])/2,(xy[i][1]+xy[i+1][1])/2]);
+    const bw=r.id.length*4.9+9, bh=12;
+    for(const [cx,cy] of cand){
+      const box={x1:cx-bw/2-2,y1:cy-bh/2-2,x2:cx+bw/2+2,y2:cy+bh/2+2};
+      if(!clear(box)) continue;
+      shields+=`<g class="msshield${r.i?" i":""}">`
+        +`<rect x="${(cx-bw/2).toFixed(1)}" y="${(cy-bh/2).toFixed(1)}" `
+        +`width="${bw.toFixed(1)}" height="${bh}" rx="2"/>`
+        +`<text x="${cx.toFixed(1)}" y="${(cy+3).toFixed(1)}" text-anchor="middle">`
+        +`${r.id}</text></g>`;
+      boxes.push(box);
+      break;
+    }
+  });
+
+  let s=land+roads+shields;
   pts.forEach(p=>{
     const h=p.r.rec.hi;
     const n=h==null?"—":String(Math.round(h));
@@ -1882,7 +1947,8 @@ function drawMs(){
   });
   $("key").innerHTML=`<span>Coolest <i class="tgrad"></i> warmest, among these `
     +`cities on the day shown</span>`
-    +`<span style="color:var(--ink-soft)">Outline simplified; city positions exact</span>`;
+    +`<span style="color:var(--ink-soft)">Outline and routes simplified; `
+    +`city positions exact</span>`;
 
   const deg=M?"":"°";
   const nice=t=>`${WDAYS[new Date(t+"T12:00:00").getDay()]}<span class="mon">`

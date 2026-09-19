@@ -272,7 +272,26 @@ Changing these without understanding why breaks correctness, not just appearance
   smoothed away. It is a frame, not a survey — the key says "outline simplified; city
   positions exact", because the city coordinates *are* exact and the outline is the
   one drawn thing on the page that is an approximation. Do not let it acquire an
-  authority it has not earned by dropping that caption.
+  authority it has not earned by dropping that caption. `MS_ROADS` carries ten major
+  routes on the same terms — I-55, I-20, I-59, I-10, I-22, US 61, 45, 49, 82 and 84 —
+  as simplified centrelines, which is why the caption reads "outline *and routes*
+  simplified".
+- **Road geometry is checked against the outline, not against the eye.** Every road
+  vertex *and* 50 sampled points along every segment are tested point-in-polygon
+  against `MS_OUTLINE` — 3,610 points in total, all of which must fall inside. The
+  vertex check alone is not enough: a straight hop between two interior points can
+  still cut a corner off a concave boundary, which is exactly how I-59's crossing of
+  the Pearl River was caught running over open water. Re-run it after touching either
+  array. Watch the sign when nudging an endpoint: longitudes here are negative, so
+  *east* is the larger number, and "move it inside" on the Alabama line means more
+  negative, not less.
+- **Shields yield to everything and are dropped rather than squeezed.** Roads are
+  context, not data, so the badges are placed only after the markers and the city
+  names, against the same collision test, trying every interior vertex and every
+  midpoint along the route. A route whose badge finds no clear spot keeps its line
+  and loses its label — which is what happens to US 82 on a phone. The lines
+  themselves are drawn under the markers and are deliberately dim; if they ever start
+  competing with the temperature ramp for attention, they are wrong.
 - **`msProject()` corrects longitude by cos(lat).** At Mississippi's latitude a degree
   of longitude is 0.84 of a degree of latitude, so plotting lon and lat on the same
   scale comes out a third too wide and the state reads as the wrong shape. The scale
@@ -287,6 +306,10 @@ Changing these without understanding why breaks correctness, not just appearance
   state's northern edge and its name landed on the caption before that rule. The
   harness asserts no name overlaps another name or another city's marker; placement
   depends only on coordinates and name length, so checking one day checks all seven.
+- **The marker ring is `--paper`, and wide enough to cut the marker out of the map.**
+  With roads under them the markers needed a heavier ring — 2.2px, and 2.8px when
+  hovered or selected — so a chip reads as sitting on top of the state rather than
+  merging into whatever line passes behind it.
 - **The number inside a map marker is pure black, and that is a measured value.**
   The markers are solid ramp colours at full opacity, which is a much harder
   background than the table's 50%-alpha tint. Measured across the ramp at 5% steps:
