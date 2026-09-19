@@ -522,20 +522,25 @@ const MS_ROADS=[
 // Marker-only places: drawn for orientation, with no forecast behind them. They are
 // not in MS_CITIES, so they cost no requests and never reach the table or the
 // ranking — a dot and a name, nothing tappable.
-// North to south, which is also the order they compete for label space in: the
-// first one placed gets the clear ground. A place whose name will not fit without
-// overlapping something is dropped entirely rather than drawn on top of it — a dot
-// with no name tells a reader nothing anyway.
+// Sorted north to south like MS_CITIES, which is also the order they compete for
+// label space in: the first one placed gets the clear ground. Sorting at definition
+// means a new entry can go anywhere in the list. A place whose name will not fit
+// without overlapping something is dropped entirely rather than drawn on top of it —
+// a dot with no name tells a reader nothing anyway.
 const MS_PLACES=[
   {name:"Amory",      lat:33.9846, lon:-88.4887},
+  {name:"Bruce",      lat:33.9917, lon:-89.3486},
   {name:"Houston",    lat:33.8984, lon:-88.9994},
   {name:"Eupora",     lat:33.5426, lon:-89.2665},
   {name:"Starkville", lat:33.4504, lon:-88.8184},
   {name:"Louisville", lat:33.1251, lon:-89.0542},
+  {name:"Macon",      lat:33.1067, lon:-88.5614},
   {name:"Yazoo City", lat:32.8551, lon:-90.4056},
+  {name:"Vicksburg",  lat:32.3526, lon:-90.8779},
+  {name:"Raleigh",    lat:32.0331, lon:-89.5236},
   {name:"Bude",       lat:31.4626, lon:-90.8531},
   {name:"Lucedale",   lat:30.9254, lon:-88.5303},
-];
+].sort((a,b)=>b.lat-a.lat);
 const MS_DAYS=7;
 // Mississippi's real boundary and its 82 county lines, both derived from the US
 // Census county polygons: the edges exactly two counties share are the interior
@@ -1845,8 +1850,12 @@ function drawMsMap(rows,date){
   // its name landed straight on the caption before this.
   const clear=b=>b.x1>=4&&b.x2<=W-4&&b.y1>=top-1
     &&!boxes.some(o=>!(b.x2<=o.x1||b.x1>=o.x2||b.y2<=o.y1||b.y1>=o.y2));
-  const place=(p,name,r,px,tl,gap,raised)=>{
+  const place=(p,name,r,px,tl,gap0,raised)=>{
     const hw=textW(name,px)/2+3;
+    // Every position is tried close in, then again pushed further out. A name a few
+    // pixels off its dot still reads as belonging to the nearest one, and is much
+    // better than the place being dropped for want of room.
+    for(const gap of (raised?[gap0,gap0+7,gap0+14]:[gap0])){
     const up={x:p.x, y:p.y-r-gap, a:"middle",
       b:{x1:p.x-hw,y1:p.y-r-gap-tl,x2:p.x+hw,y2:p.y-r-gap+tl*0.25}};
     const down={x:p.x, y:p.y+r+gap+tl, a:"middle",
@@ -1867,10 +1876,12 @@ function drawMsMap(rows,date){
       b:{x1:p.x-4-2*hw,y1:down.b.y1,x2:p.x-2,y2:down.b.y2}};
     const order=raised?[up,upR,upL,down,downR,downL,right,left]:[up,down,right,left];
     const fit=order.find(c=>clear(c.b));
-    if(!fit&&raised) return false;           // a place with nowhere clear is dropped
-    p.lab=fit||down;                         // a station always draws, number first
+    if(!fit){ if(raised) continue; p.lab=down; }   // a station always draws, number first
+    else p.lab=fit;
     boxes.push({x1:p.lab.b.x1-pad,y1:p.lab.b.y1-pad,x2:p.lab.b.x2+pad,y2:p.lab.b.y2+pad});
     return true;
+    }
+    return false;                            // nowhere clear at any distance
   };
   // Stations first: they carry the numbers, so they get the clear ground.
   pts.forEach(p=>place(p,p.r.city.name,rr,10.5,lh,5));
