@@ -5,9 +5,16 @@ Working notes for picking this up cold. Written for Claude Code, useful to human
 ## What it is
 
 One self-contained `index.html` that charts daily weather for any city, 2000 to the
-current year. No build step, no dependencies, no API keys, no backend. Everything is
-fetched client-side at runtime and drawn as hand-built SVG — there is no charting
-library and no framework.
+current year. No build step, no dependencies, no charting library and no framework —
+everything is drawn as hand-built SVG and fetched client-side at runtime.
+
+**There is now exactly one exception, and it is worth knowing before you read further:**
+the ecobee thermostat panel reads from a Supabase table rather than from a weather API.
+Not out of preference — ecobee caps a pull at 31 days and keeps only ~15 months, and its
+refresh token rotates on every single use, so a static page can neither accumulate the
+history nor hold the credential. Everything else in the file still obeys the original
+rules, and the Supabase key in the source is a publishable one that can only read two
+tables. See **The ecobee panel** below.
 
 It opens on **Brandon, MS** (32.2803, −89.9983) despite the repo name — the name is
 from the original default and the Vercel project, and renaming either would cost the
@@ -47,6 +54,7 @@ All keyless. All free tier.
 | Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation, then cached in `localStorage` (~380 KB) so it is pulled once per browser rather than once per load |
 | Soil baseline | archive, 2016–2025 **hourly** | large; fetched only on demand |
 | Daily condition | rides the archive + forecast calls | WMO `weather_code`, no extra request |
+| **Thermostat (home only)** | `wcrsomethkjlfhhuurmh.supabase.co/rest/v1/ecobee_daily` | one row per local day, written by a cron; one call, on demand, home city only |
 
 **Open-Meteo's free tier is non-commercial only** and requires CC BY attribution. Fine
 for a personal dashboard; it becomes a licensing question if this ever monetises.
@@ -94,6 +102,12 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 - **Rainfall records** — the same encoding on the Timeline's rain panel: dashed
   outlines for the wettest and driest years in the full archive, at week and month
   aggregation only.
+- **HVAC runtime panel (home city only)** — a Timeline panel of the house's own ecobee:
+  cooling, heating and aux runtime as stacked bars in hours, with indoor temperature on
+  a right-hand axis over them. Off by default, one more button beside Soil and Solar,
+  and absent entirely on any city that is not the house. The reading it exists for is
+  runtime against the day's heat — a bar growing while the indoor line drifts up is a
+  system losing ground, which no thermostat app will tell you.
 - **Forecast source picker** — the chart's forecast days can be driven by NWS
   (default) or by any of the raw models Open-Meteo exposes. A comparison table under
   the chart shows every source's daily high side by side, so a forecast that
@@ -504,6 +518,51 @@ Changing these without understanding why breaks correctness, not just appearance
   nothing is overwritten irrecoverably, so flipping the picker needs no refetch. NWS
   is fetched on every load even when it is not driving, because the comparison table
   has to be able to show it. Sources only ever touch days after `OBS_END`.
+- **The ecobee integration is server-side because the credential forces it, not because
+  a table was convenient.** ecobee rotates the refresh token on every `/token` call and
+  kills the old one the instant it answers, so whatever holds that token must be able to
+  write a new one back. A static page cannot, and neither can a stateless serverless
+  function — it cannot rewrite its own env vars. `public.ecobee_auth` is that writable
+  place. The ecobee *API key* is not in it: that is an edge function secret, because it
+  never changes. This is also why a Vercel function was the wrong shape for the job even
+  though the repo already deploys there.
+- **`ecobee-sync` writes the rotated token before it fetches anything.** If the report
+  call runs first and fails, the token that was just issued is gone and the old one is
+  already dead — the integration is bricked until the PIN dance is repeated by hand. So
+  the order is refresh, store, *then* fetch, and a failed store aborts rather than
+  carrying on. A refresh token also expires after 30 days unused, which is the real
+  reason the cron matters: miss a month and it has to be re-authorized.
+- **ecobee fails with HTTP 200 too.** An error comes back as a non-zero `status.code` in
+  an otherwise fine response — the same blind spot Open-Meteo has with
+  `{error:true,reason}`, and checking `r.ok` catches neither. Both ecobee calls in the
+  sync check the shape, exactly as `maybeLoadHist()` does.
+- **`intervals` is the thermostat's `est` flag.** A complete day is 288 five-minute
+  rows; fewer means the runtime totals are *floors*, not totals. Today always is one,
+  and so is any day the thermostat was offline. Partial days are still drawn and still
+  counted — they are the best figure available — but washed out to 42% opacity, tagged
+  "part day" in the readout, and marked `partial` in the CSV. Provenance, not
+  suppression: the same rule `est` days follow on the weather side.
+- **Runtime sums across a bucket, indoor temperature averages.** Different quantities,
+  different aggregation, the same way rainfall sums while temperature averages. A bucket
+  with no thermostat rows returns `null` rather than zeros — a zero would read as a
+  system that never ran, which is a different claim from "no data".
+- **Indoor temperature is on the HVAC panel's right-hand axis, not on the temperature
+  panel.** It was on the temperature panel first, and rendering it showed why that
+  fails: a Mississippi summer holds the house near 73°F and the outdoor low between 71
+  and 76°F, so the two lines sit on top of each other through the entire cooling season
+  — unreadable exactly when it matters. On the runtime panel it sits next to the load it
+  explains. Its axis also has a **10°F minimum span**, for the same reason the
+  verification axis starts at zero: a thermostat holds a degree or two, and a range
+  fitted tight to that turns ordinary cycling into a mountain range.
+- **`--indoor` is `#C98A9B`, and the distance was measured.** The existing temperature
+  lines sit 39–95 ΔE apart, so a new one had to clear roughly that. `#C98A9B` is ≥33 ΔE
+  from everything on its panel and 5.91:1 against `--paper`. Its one close neighbour is
+  `--uv` at ΔE 24, which never shares a panel with it — the two meet only in the key,
+  where they are a swatch apart and labelled.
+- **The thermostat panel exists only on the home city, and is absent rather than
+  disabled elsewhere.** `HVAC_HOME` is a `city.key`, so searching Memphis simply does
+  not offer the control. A greyed-out button would read as something that failed to
+  load; there is nothing to load, because there is no thermostat in Memphis.
 - **Observed beats modelled.** Where archive and forecast overlap, the archive wins —
   *except* UV index and precipitation probability, which the archive doesn't carry, so
   they're merged onto the archive record. See `absorb()`.
@@ -637,6 +696,24 @@ Changing these without understanding why breaks correctness, not just appearance
   It now passes its own `ok`. Anything that requests a shape other than a single
   `{daily}`/`{hourly}` object has to do the same; check a cold load against a reload
   when adding one, because nothing else surfaces it.
+- **The thermostat response is an array, which is the array-cache trap a second time.**
+  `grabCached()`'s default `ok` looks for `j.daily`, and a PostgREST response is a bare
+  array, so `maybeLoadHvac()` passes `j=>Array.isArray(j)`. This is the same bug the
+  statewide tab shipped with for weeks. Any new request whose shape is not a single
+  `{daily}`/`{hourly}` object has to say so, and the only way to notice is to compare a
+  cold load against a reload.
+- **The Supabase key is in the query string on purpose.** `grab()` is a bare
+  `fetch(u)` with no headers, so `?apikey=` is the only way to authenticate without
+  changing it — and it keeps the cache key derived from the whole request, which is the
+  rule. The key is the publishable one; RLS gives it `select` on `ecobee_daily` and
+  `ecobee_sync` and nothing else, and `ecobee_auth` has RLS on with **no policies at
+  all**, which is what makes the token unreadable. Supabase's linter reports that last
+  one as "RLS enabled, no policy" — that is the intended state, not a finding.
+- **Do not verify RLS with curl from an agent session.** The environment proxies
+  requests to this Supabase host and injects privileged credentials, so a browser-shaped
+  test silently runs as a privileged role: an anon write that must fail returns 201, and
+  an anon read of the token table returns `[]` for want of rows rather than for want of
+  permission. Check it in SQL under `set local role anon` instead.
 - **`.key` needed `[hidden]` spelled out too.** `.key{display:flex}` is the same trap
   `.grp` fell into: the statewide tab hides the key, and without `.key[hidden]
   {display:none}` an empty flex row kept its margins. That is now two elements caught
@@ -689,6 +766,45 @@ Changing these without understanding why breaks correctness, not just appearance
 - **`api.weather.gov` is US-only.** Non-US points 404 on the `/points` call; the
   `try/catch` in `loadCity()` leaves the model blend in place. That is the intended
   fallback, not an error to fix.
+
+## The ecobee panel
+
+The code is in place and the schedule is built; it draws nothing until it is given
+credentials, and says so in the UI rather than showing zeros. Four steps, once:
+
+1. **An ecobee API key.** This is the blocker, and it may not be surmountable: ecobee's
+   developer page currently reads *"we are not currently accepting new developer
+   registrations at this time."* If you already have a developer account, the key is
+   under My Apps. If not, there is no API route at present — the Home IQ web portal's
+   CSV export (System Monitor → Download Data, 31 days a time, ~15 months back) is the
+   fallback, and `ecobee_daily` is shaped to receive it.
+2. `supabase secrets set ECOBEE_API_KEY=…` on project `wcrsomethkjlfhhuurmh`.
+3. **Authorize**, read-only. `POST` to the `ecobee-auth` function with
+   `{"action":"pin"}`, enter the PIN it returns at ecobee.com → My Apps → Add
+   Application, then `POST {"action":"claim","code":"<the code it returned>"}` within
+   ~9 minutes. The scope requested is `smartRead` deliberately: this panel only ever
+   displays numbers, and a read-only grant cannot change a setpoint even if the token
+   leaks. Then call `ecobee-sync` once with `{"days":460}` to backfill everything
+   ecobee still holds.
+4. **Turn on the cron.** Put the service role key in Vault as
+   `ecobee_sync_service_key`, then
+   `select cron.alter_job(job_id := (select jobid from cron.job where jobname='ecobee-daily-sync'), active := true);`
+   It is scheduled 05:17 UTC — just after local midnight, so the day it re-reads has
+   finished — and left **inactive** until that secret exists, because an active job
+   would only fail nightly.
+
+Pieces, so a later reader can find them: tables `ecobee_daily` (the rollups, anon
+readable), `ecobee_auth` (the rotating token, unreadable), `ecobee_sync` (last outcome,
+anon readable, so the page can say when it last refreshed); functions `ecobee-sync` and
+`ecobee-auth`; client entry point `maybeLoadHvac()`.
+
+Two caveats that belong next to the numbers. The `outdoor_mean` ecobee reports is a
+nearby *station* relayed by ecobee, not a sensor at the house — it is an independent
+check on ERA5's 31 km cell, which this app otherwise has none of, but it is not a
+backyard thermometer. And `heat_minutes` is compressor heat while `aux_minutes` is
+auxiliary or furnace heat, so on a gas furnace *all* heating lands in aux; the two are
+kept apart rather than merged because merging them would invent a number the feed
+never gave.
 
 ## House style
 

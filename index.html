@@ -6,7 +6,7 @@
     color-scheme:dark;
     --paper:#16212A; --ink:#E6EDEC; --ink-soft:#8CA0A6; --rule:#2E3E48;
     --hot:#E8713C; --cold:#5FAAD2; --rain:#4FA5A8; --soil:#B79A63;
-    --solar:#D9A441; --uv:#C77DBA;
+    --solar:#D9A441; --uv:#C77DBA; --indoor:#C98A9B;
     --normal:rgba(190,214,220,.13); --normal-edge:#6E8894; --today:#7FC29B;
   }
   *{box-sizing:border-box}
@@ -73,6 +73,7 @@
   .hi{fill:none;stroke:var(--hot);stroke-width:1.2;opacity:.88;stroke-linejoin:round}
   .lo{fill:none;stroke:var(--cold);stroke-width:1.2;opacity:.88;stroke-linejoin:round}
   .cityline{fill:none;stroke-width:1.8;stroke-linejoin:round}
+  .indoorline{fill:none;stroke:var(--indoor);stroke-width:1.3;opacity:.9}
   .soilline{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
   .soilfill{stroke:none;opacity:.3}
   .midline{stroke:var(--ink-soft);stroke-width:1;opacity:.45;stroke-dasharray:2 4}
@@ -345,6 +346,7 @@
       <span class="sep"></span>
       <button id="soilbtn" class="desktop-only" aria-pressed="false">Soil moisture</button>
       <button id="solarbtn" class="desktop-only" aria-pressed="false">Solar &amp; UV</button>
+      <button id="hvacbtn" class="desktop-only" aria-pressed="false" hidden>HVAC runtime</button>
       <button id="out">Zoom out</button>
     </div>
     <p class="hint" id="hint2"></p>
@@ -365,6 +367,21 @@ const FC_DAYS=16, MAX_CITIES=5, YEAR_MIN=2000;
 // a cooler mid-century into the reference and overstate every present-day reading.
 const CLIM_FROM=1991, CLIM_TO=2020, SMOOTH=7;
 const SOIL_BAND="soil_moisture_7_to_28cm", SOIL_FROM=2016, SOIL_TO=2025, SOIL_WIN=7;
+
+/* ---------- ecobee: the house's own HVAC ----------
+   Read from Supabase, where a daily cron rolls up ecobee's five-minute runtimeReport
+   intervals into one row per day. It is deliberately NOT fetched from ecobee here:
+   ecobee's own API caps a pull at 31 days and keeps only ~15 months, so a table that
+   accumulates is the only way this can ever show more than ecobee still holds — and
+   the refresh token it needs rotates on every use, which no static page can store.
+   The key below is the publishable one and is meant to be public: row-level security
+   grants it SELECT on these two tables and nothing else, and the rotating token lives
+   in a third table it cannot read at all. It rides in the query string because grab()
+   sends no headers, which also keeps the cache key derived from the whole request. */
+const HVAC_API="https://wcrsomethkjlfhhuurmh.supabase.co/rest/v1";
+const HVAC_KEY="sb_publishable_CmmhyRA-D2HdL37h445BIQ_0O3GEpMP";
+const HVAC_HOME="32.280,-89.998";   // one house, so one city.key — to 3dp, as keys are
+const HVAC_FULL=288;                // five-minute intervals in a complete day
 const SOIL_STOPS=[[0,"#C2542B"],[30,"#C89A55"],[50,"#8E9C93"],[70,"#4E9FAA"],[100,"#3B8AC4"]];
 // The soil ramp read the other way round: coolest blue, hottest red. Reusing the
 // stops the app already ships keeps one colour language rather than two.
@@ -565,7 +582,7 @@ let fcSource=(()=>{
 let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
 let msByCity=new Map(), msDays=[], msTried=false, msLoading=false, msErr=[], msSel=null;
 let msNwsDone=false, msNwsMissing=[], msDay=0;
-let soilOn=false, solarOn=false, activePanel="temp", gran="day";
+let soilOn=false, solarOn=false, hvacOn=false, activePanel="temp", gran="day";
 let mode="fc", thresh=100, selDate=null;   // the forecast comparison is the landing view
 const HOT_CHOICES=[85,90,95,100,105,110];
 
@@ -613,6 +630,9 @@ function buildBuckets(g){
 // highs and lows, solar stays a per-day mean so periods of different length compare.
 function aggCity(city,b){
   let hi=0,lo=0,mn=0,n=0, rain=0,rn=0, solar=0,sn=0, uv=0,un=0, soil=0,so=0, api=0,an=0, cum=null, pop=null, wc=null, est=false;
+  // Runtime sums across a bucket the way rainfall does; indoor temperature averages
+  // the way the outdoor series does. Different quantities, different rules.
+  let hvC=0,hvH=0,hvA=0,hvF=0,hvT=0,hvN=0,hvAny=false,hvPart=false;
   b.idxs.forEach(i=>{
     const r=city.byDate.get(DATES[i]); if(!r) return;
     if(b.idxs.length===1) wc=r.wc;   // a week has no single condition to show
@@ -625,11 +645,19 @@ function aggCity(city,b){
     if(r.uv!=null){uv+=r.uv; un++;}
     const sm=city.soil&&city.soil.get(DATES[i]); if(sm){soil+=sm.pct; so++;}
     const ap=city.api&&city.api.pct.get(DATES[i]); if(ap!=null){api+=ap; an++;}
+    const hv=city.hvac&&city.hvac.get(DATES[i]);
+    if(hv){
+      hvAny=true; if(hv.partial) hvPart=true;
+      hvC+=hv.cool; hvH+=hv.heat; hvA+=hv.aux; hvF+=hv.fan;
+      if(hv.indoor!=null){ hvT+=hv.indoor; hvN++; }
+    }
   });
   if(!n) return null;
   return {n, hi:hi/n, lo:lo/n, mean:mn/n, rain:rn?rain:null, cum, pop, wc, est,
           solar:sn?solar/sn:null, uv:un?uv/un:null,
-          soilPct:so?soil/so:null, apiPct:an?api/an:null};
+          soilPct:so?soil/so:null, apiPct:an?api/an:null,
+          hvac:hvAny?{cool:hvC,heat:hvH,aux:hvA,fan:hvF,
+                      indoor:hvN?hvT/hvN:null,partial:hvPart}:null};
 }
 function aggClim(clim,b){
   let hi=0,lo=0,n=0,pr=0,pn=0,sr=0,sn=0;
@@ -697,13 +725,14 @@ async function addCity(lat,lon,label){
 
   const city={key,label,lat,lon,color:nextColor(),byDate:new Map(),
               climRaw:null,clim:null,histRaw:null,histTried:false,histLoading:false,histErr:null,
-              soilBase:null,soil:null,api:null,loading:true,id:++seq};
+              soilBase:null,soil:null,api:null,hvac:null,hvacTried:false,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
   if(cities.includes(city)){
     if(mode==="chart"||mode==="hot") maybeLoadClim();
     if(mode==="ver") maybeLoadVer(city);
     maybeLoadSoil();
+    if(hvacOn) maybeLoadHvac(city);
   }
 }
 
@@ -1106,6 +1135,7 @@ const TTL_STATIC=30*864e5;    // normals, past years, soil baseline: a month
 // Verification asks for "the last VER_DAYS days", so the same URL means something
 // different tomorrow. Half a day keeps repeat visits free without freezing the window.
 const TTL_VER=12*36e5;
+const TTL_HVAC=30*6e4;        // yesterday is settled, today is still filling in
 function lsGet(key,maxAge){
   try{
     const raw=localStorage.getItem(key); if(!raw) return null;
@@ -1355,6 +1385,45 @@ async function maybeLoadSoil(){
   if(cities.length===1&&cities[0]===c) draw();
 }
 
+/* ---------- ecobee daily rollups ----------
+   Lazy, like the soil baseline: the landing view never reads it, and the tab that does
+   asks once per city per session. Only the home city has a thermostat, so every other
+   city skips out immediately and costs nothing.
+
+   The response is an ARRAY, not the {daily} object grabCached() tests for by default,
+   so it passes its own ok — the statewide tab was silently refetching on every single
+   page load for weeks because it did not. */
+async function maybeLoadHvac(city){
+  if(!city||city.hvacTried||city.key!==HVAC_HOME) return;
+  city.hvacTried=true;
+  const btn=$("hvacbtn"); btn.dataset.busy="1"; btn.textContent="Loading HVAC…"; syncButtons();
+  try{
+    const rows=await grabCached(`${HVAC_API}/ecobee_daily?select=day,indoor_mean,indoor_max,`
+      +`indoor_min,humidity_mean,outdoor_mean,cool_minutes,heat_minutes,aux_minutes,`
+      +`fan_minutes,intervals&day=gte.${START}&day=lte.${HORIZON}&order=day`
+      +`&apikey=${HVAC_KEY}`, "hvac", TTL_HVAC, j=>Array.isArray(j));
+    const m=new Map(), num=v=>v==null?null:+v;
+    (rows||[]).forEach(r=>{
+      if(!r||!r.day) return;
+      m.set(r.day,{indoor:num(r.indoor_mean),indoorMax:num(r.indoor_max),
+        indoorMin:num(r.indoor_min),hum:num(r.humidity_mean),outdoor:num(r.outdoor_mean),
+        cool:num(r.cool_minutes)||0,heat:num(r.heat_minutes)||0,
+        aux:num(r.aux_minutes)||0,fan:num(r.fan_minutes)||0,
+        // A complete day is HVAC_FULL intervals. Fewer means the runtime totals are
+        // floors rather than totals — today always is, and so is any day the
+        // thermostat was offline — so the bucket is flagged rather than passing as
+        // whole, exactly as an est weather day is.
+        partial:(r.intervals||0)<HVAC_FULL});
+    });
+    city.hvac=m.size?m:null;
+  }catch(e){ city.hvac=null; }
+  btn.dataset.busy=""; btn.textContent="HVAC runtime";
+  if(!city.hvac) note(`No thermostat data yet for ${esc(city.label)} — the ecobee sync `
+    +`has not written any days for ${year}.`);
+  syncButtons();
+  if(cities.includes(city)) draw();
+}
+
 function buildSoil(cur,base){
   const byKey=new Map();
   base.forEach((v,d)=>{
@@ -1519,6 +1588,13 @@ function syncButtons(){
   sb.setAttribute("aria-pressed",String(soilOn&&solo));
   lb.disabled=!solo;
   lb.setAttribute("aria-pressed",String(solarOn&&solo));
+  // Only the house has a thermostat, so the control exists only where it means
+  // something. Everywhere else it is absent rather than disabled — a greyed button
+  // on a city in another state would read as something that failed to load.
+  const hb=$("hvacbtn"), home=cities.length===1&&cities[0].key===HVAC_HOME;
+  hb.hidden=!(chart&&home);
+  hb.disabled=hb.dataset.busy==="1";
+  hb.setAttribute("aria-pressed",String(hvacOn&&home));
   $("granpick").querySelectorAll("[data-gran]").forEach(b=>
     b.setAttribute("aria-pressed",String(b.dataset.gran===gran)));
   const fcBtn=document.querySelector('[data-days="-1"]');
@@ -1530,7 +1606,9 @@ function syncButtons(){
 function renderPanelPick(){
   const solo=cities.length===1?cities[0]:null;
   const busy=$("soilbtn").dataset.busy==="1";
+  const hbusy=$("hvacbtn").dataset.busy==="1";
   const opts=[["temp","Temperature"],["rain","Rainfall"]];
+  if(solo&&solo.key===HVAC_HOME) opts.push(["hvac",hbusy?"HVAC…":"HVAC"]);
   if(solo) opts.push(["soil",busy?"Soil…":"Soil"],["solar","Solar & UV"]);
   $("panelpick").innerHTML=opts.map(([k,label])=>
     `<button data-panel="${k}" aria-pressed="${String(activePanel===k)}">${label}</button>`).join("");
@@ -1539,6 +1617,7 @@ function renderPanelPick(){
     if(activePanel==="solar") solarOn=true;
     if(activePanel==="soil"&&!soilOn) soilOn=true;
     if(activePanel==="soil") maybeLoadSoil();
+    if(activePanel==="hvac"){ hvacOn=true; maybeLoadHvac(cities[0]); }
     renderPanelPick(); draw();
   });
 }
@@ -2551,6 +2630,14 @@ function renderReadout(i,select){
           +`<span style="opacity:.75">${wetWord(r.soilPct)}</span></span>`:``)
       +(solarOn&&r.solar!=null?`<span class="stat" style="color:var(--solar)">solar `
           +`<b style="color:var(--solar)">${r.solar.toFixed(1)}</b> kWh/m²/day</span>`:``)
+      +(hvacOn&&r.hvac?`<span class="stat" style="color:var(--indoor)">indoor `
+          +`<b style="color:var(--indoor)">${r.hvac.indoor==null?"—":r.hvac.indoor.toFixed(1)+"°"}</b></span>`
+        +`<span class="stat" style="color:var(--cold)">cool `
+          +`<b style="color:var(--cold)">${(r.hvac.cool/60).toFixed(1)}h</b></span>`
+        +((r.hvac.heat+r.hvac.aux)?`<span class="stat" style="color:var(--hot)">heat `
+          +`<b style="color:var(--hot)">${((r.hvac.heat+r.hvac.aux)/60).toFixed(1)}h</b></span>`:``)
+        // Provenance, not suppression: the figure still shows, flagged as a floor.
+        +(r.hvac.partial?`<span class="stat" style="opacity:.7">part day</span>`:``):``)
       +`</div>`;
   }else{
     cities.forEach(c=>{
@@ -2798,20 +2885,26 @@ function draw(){
   const solo=cities.length===1?cities[0]:null;
   const hasSoil=!!(solo&&soilOn&&solo.soil);
   const hasSolar=!!(solo&&solarOn);
+  const hasHvac=!!(solo&&hvacOn&&solo.hvac);
 
   let list;
   if(M){
     let p=activePanel;
     if(p==="soil"&&!hasSoil) p="temp";
     if(p==="solar"&&!hasSolar) p="temp";
-    if(!solo&&(p==="soil"||p==="solar")) p="temp";
+    if(p==="hvac"&&!hasHvac) p="temp";
+    if(!solo&&(p==="soil"||p==="solar"||p==="hvac")) p="temp";
     list=[p];
   }else{
     list=["temp","rain"];
+    // HVAC sits directly under the weather it answers to, above the two optional
+    // ERA5 panels: the question it exists for is runtime against the day's heat.
+    if(hasHvac) list.push("hvac");
     if(hasSoil) list.push("soil");
     if(hasSolar) list.push("solar");
   }
   const showSoil=list.includes("soil"), showSolar=list.includes("solar");
+  const showHvac=list.includes("hvac");
 
   // Visible buckets: whole buckets that overlap the view, so a month bar always sums
   // its whole month even when only part of it is on screen.
@@ -2821,7 +2914,7 @@ function draw(){
 
   const W=M?380:1000;
   const L=M?34:52;
-  const R=showSolar?(M?24:38):(M?8:12);
+  const R=(showSolar||showHvac)?(M?24:38):(M?8:12);
   const iw=W-L-R;
 
   // A condition symbol per day in its own row above the panels. Day granularity
@@ -2834,7 +2927,8 @@ function draw(){
   if(showSym){ symTop=y; y+=symSize+(M?6:8); }
   list.forEach(p=>{
     const lab=(p==="temp")?((M&&gran!=="day")?20:0):(M?20:22);
-    const h=M?(p==="temp"?252:210):(p==="temp"?294:p==="rain"?104:p==="soil"?88:96);
+    const h=M?(p==="temp"?252:210)
+             :(p==="temp"?294:p==="rain"?104:p==="hvac"?104:p==="soil"?88:96);
     y+=lab; geom[p]={top:y,h}; y+=h+(M?0:42);
   });
   const BOT=y-(M?0:42);
@@ -2939,6 +3033,51 @@ function draw(){
         +`<text x="${L-8}" y="${(SY(v)+4).toFixed(1)}" text-anchor="end">${v}</text>`;
     });
     s+=`<text class="panellabel" x="${L}" y="${g.top-6}">Soil 7&ndash;28&thinsp;cm, percentile vs ${SOIL_FROM}&ndash;${SOIL_TO}</text>`;
+  }
+
+  /* HVAC runtime */
+  let HY=null,IY=null;
+  if(showHvac){
+    const g=geom.hvac;
+    let hmax=0;
+    A.get(solo).forEach(r=>{ if(r&&r.hvac)
+      hmax=Math.max(hmax,(r.hvac.cool+r.hvac.heat+r.hvac.aux)/60); });
+    // Scaled to what the buckets actually reach, not pinned to 24: a day cannot run
+    // more than 24 hours but a week or a month can, and a mild week that peaks at two
+    // hours deserves the whole panel rather than a flat line along the bottom.
+    hmax=Math.max(1,Math.ceil(hmax));
+    HY=v=>g.top+g.h-(v/hmax)*g.h;
+    [0,hmax/2,hmax].forEach(v=>{
+      s+=`<line class="gridline" x1="${L}" y1="${HY(v).toFixed(1)}" x2="${W-R}" y2="${HY(v).toFixed(1)}"/>`
+        +`<text x="${L-8}" y="${(HY(v)+4).toFixed(1)}" text-anchor="end">${v%1?v.toFixed(1):v}</text>`;
+    });
+    // Indoor temperature rides a right-hand axis on this panel rather than joining the
+    // outdoor lines above. On the temperature panel it was unreadable exactly when it
+    // matters: a Mississippi summer holds the house near 73°F and the outdoor low near
+    // 71–76°F, so the two lines sit on top of each other through the whole cooling
+    // season. Here it is next to the runtime it explains — indoor drifting up while the
+    // bars grow is a system losing ground, which is the reading worth having.
+    let ilo=Infinity,ihi=-Infinity;
+    A.get(solo).forEach(r=>{ if(r&&r.hvac&&r.hvac.indoor!=null){
+      ilo=Math.min(ilo,r.hvac.indoor); ihi=Math.max(ihi,r.hvac.indoor); } });
+    if(isFinite(ilo)){
+      // A floor on the span, for the same reason the verification axis starts at zero:
+      // a thermostat holds a degree or two, and a range fitted tight to that turns
+      // ordinary cycling into a mountain range.
+      const mid=(ilo+ihi)/2, span=Math.max(10,ihi-ilo+4);
+      const i0=Math.floor(mid-span/2), i1=Math.ceil(mid+span/2);
+      IY=v=>g.top+g.h-(v-i0)/(i1-i0)*g.h;
+      [i0,Math.round((i0+i1)/2),i1].forEach(v=>{
+        s+=`<text x="${W-R+6}" y="${(IY(v)+4).toFixed(1)}" style="fill:var(--indoor)">${v}°</text>`;});
+    }
+    // Inline style, never a fill= attribute: text{fill:var(--ink-soft)} in the
+    // stylesheet beats a presentation attribute and would paint all of these grey.
+    s+=`<text class="panellabel" x="${L}" y="${g.top-6}">`
+      +`<tspan style="fill:var(--cold)">Cooling</tspan><tspan> · </tspan>`
+      +`<tspan style="fill:var(--hot)">heating</tspan><tspan> · </tspan>`
+      +`<tspan style="fill:var(--solar)">aux</tspan>`
+      +`<tspan> runtime, hours per ${gran} · </tspan>`
+      +`<tspan style="fill:var(--indoor)">indoor °F (right)</tspan></text>`;
   }
 
   /* solar + UV */
@@ -3086,6 +3225,30 @@ function draw(){
     }
   }
 
+  if(showHvac){
+    const bw=Math.max(1.2,Math.min(34,iw/Math.max(NB,1)*0.7));
+    A.get(solo).forEach((r,i)=>{
+      if(!r||!r.hvac) return;
+      // Stacked, because the reading that matters is total burden and how much of it
+      // was the expensive kind. Aux goes on top: strip heat is the part worth seeing.
+      // Segments are measured through HY, the same scale the axis is drawn from, so
+      // the bars and the ticks cannot drift apart.
+      let acc=0;
+      [[r.hvac.cool,"var(--cold)"],[r.hvac.heat,"var(--hot)"],[r.hvac.aux,"var(--solar)"]]
+        .forEach(([mins,col])=>{
+          if(!mins) return;
+          const top=HY(acc+mins/60), h=HY(acc)-top; acc+=mins/60;
+          // A partial day is washed out rather than dropped: it is the best figure
+          // available, but its total is a floor, not a total.
+          s+=`<rect x="${(X(i)-bw/2).toFixed(1)}" y="${top.toFixed(1)}" `
+            +`width="${bw.toFixed(1)}" height="${Math.max(0.6,h).toFixed(1)}" `
+            +`fill="${col}" opacity="${r.hvac.partial?.42:.85}"/>`;
+        });
+    });
+    // Over the bars, not behind them: the line is the reading, the bars are the load.
+    if(IY) s+=emit(A.get(solo),r=>(r.hvac&&r.hvac.indoor!=null)?IY(r.hvac.indoor):null,"indoorline");
+  }
+
   if(showSoil){
     const a=A.get(solo);
     const pts=[],xs=[];
@@ -3143,7 +3306,7 @@ function draw(){
   if(!selDate&&todayB>=0) renderReadout(todayB,false);
   else if(selDate&&selB>=0) renderReadout(selB,false);
 
-  legend(solo,showSoil,showSolar,M,rainRec); headline(solo); renderStats(showSoil);
+  legend(solo,showSoil,showSolar,M,rainRec,showHvac); headline(solo); renderStats(showSoil);
   $("fcsrc").hidden=true;   // the Forecast tab owns the source table
   // Must not touch anything inside #readout — renderReadout rewrites that whole subtree.
   $("hint2").textContent=(M?"Touch the chart to read a period. Pinch with two fingers to zoom."
@@ -3219,7 +3382,7 @@ function renderFcTable(solo,rows,dates){
   box.hidden=false;
 }
 
-function legend(solo,showSoil,showSolar,M,rainRec){
+function legend(solo,showSoil,showSolar,M,rainRec,showHvac){
   const bits=[];
   if(solo){
     if(!M||activePanel==="temp"){
@@ -3238,6 +3401,10 @@ function legend(solo,showSoil,showSolar,M,rainRec){
       bits.push(`<span>Soil <i class="grad" style="margin:0 7px"></i>dry to saturated</span>`);
       if(solo.api) bits.push(`<span><i class="dashed" style="border-color:var(--rain)"></i>Antecedent rain index</span>`);
     }
+    if(showHvac) bits.push(`<span><i style="background:var(--cold)"></i>Cooling runtime</span>`,
+                           `<span><i style="background:var(--hot)"></i>Heating</span>`,
+                           `<span><i style="background:var(--solar)"></i>Aux heat</span>`,
+                           `<span><i style="background:var(--indoor)"></i>Indoor (right)</span>`);
     if(showSolar) bits.push(`<span><i style="background:var(--solar)"></i>Solar</span>`,
                             `<span><i style="background:var(--uv)"></i>UV</span>`);
   }else{
@@ -3295,6 +3462,11 @@ function headline(solo){
       ? `Measured through ${pretty(solo1.obsEnd)}`
         +(solo1.estDays?`; the ${solo1.estDays} day${solo1.estDays===1?"":"s"} after that are `
           +`model estimates while ERA5 catches up. `:`. `)
+      : "")
+    +((solo1&&hvacOn&&solo1.hvac)
+      ? "Thermostat runtime and indoor temperature are this house's own ecobee, rolled "
+        +"up from its five-minute records; a day still filling in is marked a part day "
+        +"and its totals are floors. "
       : "")
     +(()=>{
       const m=FC_MODELS.find(x=>x.id===fcSource), name=m?m.label:fcSource;
@@ -3471,13 +3643,18 @@ function headline(solo){
   };
   $("soilbtn").onclick=()=>{ soilOn=!soilOn; clearNote(); syncButtons(); maybeLoadSoil(); draw(); };
   $("solarbtn").onclick=()=>{ solarOn=!solarOn; syncButtons(); draw(); };
+  // The load fires before draw(), the same ordering the soil button needs: a throw
+  // inside draw() would otherwise happen first and silently kill this handler.
+  $("hvacbtn").onclick=()=>{ hvacOn=!hvacOn; clearNote(); syncButtons();
+                             maybeLoadHvac(cities[0]); draw(); };
 
   $("dl").hidden=false;
   $("dl").onclick=()=>{
     // Exports at whatever aggregation is on screen.
     const B=buildBuckets(gran);
     const head="city,period,period_start,period_end,days,kind,mean_high_f,mean_low_f,mean_f,"
-      +"precip_in,precip_chance_pct,precip_cumulative_in,solar_kwh_m2_day,uv_index_mean,soil_percentile,antecedent_percentile";
+      +"precip_in,precip_chance_pct,precip_cumulative_in,solar_kwh_m2_day,uv_index_mean,soil_percentile,antecedent_percentile"
+      +",indoor_f,cool_hours,heat_hours,aux_hours,fan_hours,hvac_complete";
     const body=cities.flatMap(c=>B.map(b=>{
       const r=aggCity(c,b); if(!r) return null;
       return [`"${c.label}"`,b.key,b.first,b.last,r.n,
@@ -3486,7 +3663,13 @@ function headline(solo){
               r.rain==null?"":r.rain.toFixed(3), r.pop==null?"":Math.round(r.pop),
               r.cum==null?"":r.cum.toFixed(3),
               r.solar==null?"":r.solar.toFixed(3), r.uv==null?"":r.uv.toFixed(2),
-              r.soilPct==null?"":r.soilPct.toFixed(1), r.apiPct==null?"":r.apiPct.toFixed(1)].join(",");
+              r.soilPct==null?"":r.soilPct.toFixed(1), r.apiPct==null?"":r.apiPct.toFixed(1),
+              // Blank, not zero, where there is no thermostat behind the row: a zero
+              // would read as a system that never ran.
+              r.hvac&&r.hvac.indoor!=null?r.hvac.indoor.toFixed(2):"",
+              r.hvac?(r.hvac.cool/60).toFixed(3):"", r.hvac?(r.hvac.heat/60).toFixed(3):"",
+              r.hvac?(r.hvac.aux/60).toFixed(3):"", r.hvac?(r.hvac.fan/60).toFixed(3):"",
+              r.hvac?(r.hvac.partial?"partial":"complete"):""].join(",");
     }).filter(Boolean));
     const a=document.createElement("a");
     a.href=URL.createObjectURL(new Blob([head+"\n"+body.join("\n")],{type:"text/csv"}));
