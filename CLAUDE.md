@@ -23,11 +23,11 @@ opening city is the single `addCity()` call at the very bottom of the file.
 Open `index.html` in a browser. That is the entire dev loop — no server needed, no
 install, no watch process.
 
-The Vercel project currently deploys by direct file upload, not from this repo. To get
-push-to-deploy, connect it in the Vercel dashboard under **Settings → Git → Connect Git
-Repository**. Connecting the existing project (rather than creating a new one) keeps the
-`jackson-weather-corley.vercel.app` alias intact. After that, pushing `index.html` to
-`main` deploys production.
+The Vercel project is connected to this repo, so **pushing to `main` deploys
+production by itself** — no manual deployment step. Confirmed on 19 Sep 2026: the push
+of `3ed7213` produced `dpl_HUPZzuQceESDWiPkeyLTjzmzLgZp`, target production,
+`source: "git"`, with the `jackson-weather-corley.vercel.app` alias attached. A push to
+any other branch gets a preview deployment, and Vercel's bot comments the URL on the PR.
 
 ## Data sources
 
