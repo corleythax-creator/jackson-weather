@@ -301,9 +301,9 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson – Kosciusko – Tupelo and is both the direct and the obvious drive from
   Jackson, so it is the route that answers "how would I get there". It is a parkway
   rather than an interstate, so it draws in the thinner US-highway style.
-- **`MS_PLACES` are markers with no forecast behind them.** Amory, Houston, Eupora,
-  Starkville, Louisville, Yazoo City, Bude and Lucedale are there for orientation
-  only: a smaller, dimmer dot and a smaller name,
+- **`MS_PLACES` are markers with no forecast behind them.** Bruce, Amory, Houston,
+  Eupora, Starkville, Louisville, Macon, Yazoo City, Vicksburg, Raleigh, Bude and
+  Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
   deliberately unlike a station so a reader cannot mistake one for a station whose
   number failed to load. They are not in `MS_CITIES`, so they cost no requests and
   never reach the table, the ranking or the breakdown, and nothing about them is
@@ -328,19 +328,26 @@ Changing these without understanding why breaks correctness, not just appearance
   where a station tries four. None of this is decoration. Amory's plain "above" box
   overlaps Tupelo's marker by about 4px, so the raised-and-shifted pair is what keeps
   its name above the dot; and on a phone Starkville is boxed in by Columbus's marker
-  27.6px east and Eupora's already-placed name to the north-west, so the
-  below-shifted pair is the only thing that fits it at all. Shrinking the place font
-  (now 7px) was not enough on its own for either. On a phone Starkville's name still
-  sits below its dot: the map is 83px per degree there against 99.5 on a desktop, so
-  Columbus's marker is proportionally closer and "above" misses by about half a
-  pixel. A name below the dot is better than a name touching a marker, so that is
-  left alone rather than tuned to the pixel.
+  about 28px east and Eupora's already-placed name to the north-west. All eight are
+  then tried again pushed 7px out, and again at 14px, before a place is given up on.
+  That second ring is what keeps Starkville drawn on the phone map once twelve places
+  are competing, and in practice nothing lands more than about 20px from its dot, so
+  a label still reads as belonging to the nearest one. Shrinking the place font (now
+  7px) was not enough on its own for any of it. On a phone Starkville's name sits
+  below its dot rather than above: the map is 83px per degree there against 99.5 on a
+  desktop, so Columbus's marker is proportionally closer and "above" misses by about
+  half a pixel. A name below the dot beats a name touching a marker, so that is left
+  rather than tuned to the pixel.
 - **A place that cannot be placed clear is dropped, not drawn on top.** `place()`
   returns false when no candidate clears, and `drawMs()` renders only the places that
   fit. A station always draws — it carries a number, so it falls back to below and
   takes the overlap. A dot with no name tells a reader nothing, which is why the
-  whole place goes rather than just its label. Places are listed north to south and
-  placed in that order, so when two compete the northern one gets the clear ground.
+  whole place goes rather than just its label. `MS_PLACES` sorts itself by latitude
+  the way `MS_CITIES` does, so a new entry can be written anywhere in the list; the
+  order still decides who gets the clear ground, north first.
+- **Check a new place against the nearest station before adding it.** The scratch
+  harness prints that distance; anything under about 14px vanishes beneath an 11.5px
+  marker. Bruce, Vicksburg, Macon and Raleigh all came in at 40px or more.
 - **A place closer than a marker radius to a station is not worth adding.** Flowood
   was tried and removed: seven miles from Jackson is 8.9px against an 11.5px marker
   radius, and because places draw *under* the stations its dot rendered invisibly
