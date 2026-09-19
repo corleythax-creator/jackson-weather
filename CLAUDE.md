@@ -9,6 +9,11 @@ current year. No build step, no dependencies, no API keys, no backend. Everythin
 fetched client-side at runtime and drawn as hand-built SVG — there is no charting
 library and no framework.
 
+It opens on **Brandon, MS** (32.2803, −89.9983) despite the repo name — the name is
+from the original default and the Vercel project, and renaming either would cost the
+`jackson-weather-corley.vercel.app` alias. Search any city to change what's shown; the
+opening city is the single `addCity()` call at the very bottom of the file.
+
 - **Live:** https://jackson-weather-corley.vercel.app
 - **Vercel project:** `jackson-weather`, team `corley`
 - **Repo:** https://github.com/corleythax-creator/jackson-weather
