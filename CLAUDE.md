@@ -301,8 +301,9 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson – Kosciusko – Tupelo and is both the direct and the obvious drive from
   Jackson, so it is the route that answers "how would I get there". It is a parkway
   rather than an interstate, so it draws in the thinner US-highway style.
-- **`MS_PLACES` are markers with no forecast behind them.** Amory, Yazoo City,
-  Flowood, Bude and Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
+- **`MS_PLACES` are markers with no forecast behind them.** Amory, Houston, Eupora,
+  Starkville, Louisville, Yazoo City, Bude and Lucedale are there for orientation
+  only: a smaller, dimmer dot and a smaller name,
   deliberately unlike a station so a reader cannot mistake one for a station whose
   number failed to load. They are not in `MS_CITIES`, so they cost no requests and
   never reach the table, the ranking or the breakdown, and nothing about them is
@@ -315,17 +316,26 @@ Changing these without understanding why breaks correctness, not just appearance
   the stations carry the numbers so they get the clear ground and a place name gives
   way. All twelve markers and all five place dots are obstacles before any label is
   placed, so order within each group cannot change the result.
-- **A place label can slide sideways while staying raised.** Places get two extra
-  candidates — above-and-right, above-and-left — before they fall back to below. This
-  is not decoration: Amory's plain "above" box overlaps Tupelo's marker by about 4px,
-  so without them its name drops under the dot. Shrinking the place font to 7.5px was
-  not enough on its own; the sideways slide is what actually clears it.
-- **Flowood is inside Jackson's marker and its dot cannot be seen.** They are about
-  seven miles apart, which at this map scale is 8.9px against an 11.5px marker
-  radius, and places draw *under* the stations. The label still lands beside
-  Jackson's chip, where Flowood actually is, so the name reads correctly even though
-  the dot does not show. Drawing places over the markers instead would put a grey dot
-  on a temperature chip, which looks like a defect rather than a second town.
+- **A place label can slide sideways, above *or* below.** Places try eight positions
+  — above, above-right, above-left, below, below-right, below-left, right, left —
+  where a station tries four. None of this is decoration. Amory's plain "above" box
+  overlaps Tupelo's marker by about 4px, so the raised-and-shifted pair is what keeps
+  its name above the dot; and on a phone Starkville is boxed in by Columbus's marker
+  27.6px east and Eupora's already-placed name to the north-west, so the
+  below-shifted pair is the only thing that fits it at all. Shrinking the place font
+  to 7.5px was not enough on its own for either.
+- **A place that cannot be placed clear is dropped, not drawn on top.** `place()`
+  returns false when no candidate clears, and `drawMs()` renders only the places that
+  fit. A station always draws — it carries a number, so it falls back to below and
+  takes the overlap. A dot with no name tells a reader nothing, which is why the
+  whole place goes rather than just its label. Places are listed north to south and
+  placed in that order, so when two compete the northern one gets the clear ground.
+- **A place closer than a marker radius to a station is not worth adding.** Flowood
+  was tried and removed: seven miles from Jackson is 8.9px against an 11.5px marker
+  radius, and because places draw *under* the stations its dot rendered invisibly
+  beneath Jackson's chip, leaving a name pointing at nothing. Drawing places over the
+  markers instead would put a grey dot on a temperature chip, which reads as a defect
+  rather than a second town. Check the pixel separation before adding a suburb.
 - **A shield may carry `dx`/`dy` and `sm`.** The nudge shifts the *candidate* before
   the collision test, not the badge afterwards, so a hand-placed label still cannot
   overlap anything — US 61 uses `dy:-11`. `sm` is for a route named rather than

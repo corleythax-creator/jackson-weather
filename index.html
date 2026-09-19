@@ -522,10 +522,17 @@ const MS_ROADS=[
 // Marker-only places: drawn for orientation, with no forecast behind them. They are
 // not in MS_CITIES, so they cost no requests and never reach the table or the
 // ranking — a dot and a name, nothing tappable.
+// North to south, which is also the order they compete for label space in: the
+// first one placed gets the clear ground. A place whose name will not fit without
+// overlapping something is dropped entirely rather than drawn on top of it — a dot
+// with no name tells a reader nothing anyway.
 const MS_PLACES=[
   {name:"Amory",      lat:33.9846, lon:-88.4887},
+  {name:"Houston",    lat:33.8984, lon:-88.9994},
+  {name:"Eupora",     lat:33.5426, lon:-89.2665},
+  {name:"Starkville", lat:33.4504, lon:-88.8184},
+  {name:"Louisville", lat:33.1251, lon:-89.0542},
   {name:"Yazoo City", lat:32.8551, lon:-90.4056},
-  {name:"Flowood",    lat:32.3320, lon:-90.0860},
   {name:"Bude",       lat:31.4626, lon:-90.8531},
   {name:"Lucedale",   lat:30.9254, lon:-88.5303},
 ];
@@ -1844,13 +1851,20 @@ function drawMsMap(rows,date){
       b:{x1:p.x+2,y1:up.b.y1,x2:p.x+4+2*hw,y2:up.b.y2}};
     const upL={x:p.x-3, y:up.y, a:"end",
       b:{x1:p.x-4-2*hw,y1:up.b.y1,x2:p.x-2,y2:up.b.y2}};
-    const order=raised?[up,upR,upL,down,right,left]:[up,down,right,left];
-    p.lab=order.find(c=>clear(c.b)) || down;
+    const downR={x:p.x+3, y:down.y, a:"start",
+      b:{x1:p.x+2,y1:down.b.y1,x2:p.x+4+2*hw,y2:down.b.y2}};
+    const downL={x:p.x-3, y:down.y, a:"end",
+      b:{x1:p.x-4-2*hw,y1:down.b.y1,x2:p.x-2,y2:down.b.y2}};
+    const order=raised?[up,upR,upL,down,downR,downL,right,left]:[up,down,right,left];
+    const fit=order.find(c=>clear(c.b));
+    if(!fit&&raised) return false;           // a place with nowhere clear is dropped
+    p.lab=fit||down;                         // a station always draws, number first
     boxes.push({x1:p.lab.b.x1-pad,y1:p.lab.b.y1-pad,x2:p.lab.b.x2+pad,y2:p.lab.b.y2+pad});
+    return true;
   };
   // Stations first: they carry the numbers, so they get the clear ground.
   pts.forEach(p=>place(p,p.r.city.name,rr,5.8,lh,5));
-  plc.forEach(p=>place(p,p.c.name,pr,4.2,9,3.5,true));
+  const shown=plc.filter(p=>place(p,p.c.name,pr,4.2,9,3.5,true));
 
   // Shields go on last and give way to everything: they are placed against the
   // markers and the city names already down, and a route whose badge cannot find a
@@ -1881,7 +1895,7 @@ function drawMsMap(rows,date){
     }
   });
 
-  const places=plc.map(p=>`<g class="msplace">`
+  const places=shown.map(p=>`<g class="msplace">`
     +`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${pr}"/>`
     +`<text x="${p.lab.x.toFixed(1)}" y="${p.lab.y.toFixed(1)}" `
     +`text-anchor="${p.lab.a}">${esc(p.c.name)}</text></g>`).join("");
