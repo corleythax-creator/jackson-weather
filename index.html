@@ -172,6 +172,10 @@
   .msdot:hover circle,.msdot.sel circle{stroke:var(--ink);stroke-width:2.8}
   .msname{fill:var(--ink-soft);font-size:10.5px}
   .msdot.sel .msname{fill:var(--ink)}
+  /* A place with no forecast behind it: a smaller, quieter dot and name, so it reads
+     as orientation rather than as a station whose number failed to load. */
+  .msplace circle{fill:var(--ink-soft);opacity:.55}
+  .msplace text{fill:var(--ink-soft);opacity:.75;font-size:9px}
   .mslo{fill:var(--ink-soft);font-size:9.5px}
   .msrank text{font-size:12px}
 
@@ -472,6 +476,7 @@ const MS_CITIES=[
   {name:"Clarksdale", lat:34.2001, lon:-90.5712},
   {name:"Cleveland",  lat:33.7444, lon:-90.7250},
   {name:"Greenwood",  lat:33.5162, lon:-90.1795},
+  {name:"Kosciusko",  lat:33.0579, lon:-89.5892},
   {name:"Grenada",    lat:33.7690, lon:-89.8081},
 ].sort((a,b)=>b.lat-a.lat);
 // Major routes, [lon,lat] along each centreline, traced by hand at the same rough
@@ -502,10 +507,26 @@ const MS_ROADS=[
     [-90.65,33.45],[-90.55,33.72],[-90.57,34.2],[-90.57,34.654]]},
   {id:"US 82",pts:[[-91.172,33.399],[-90.65,33.45],[-90.18,33.52],[-89.73,33.49],
     [-88.82,33.45],[-88.43,33.5],[-88.285,33.428]]},
+  // The way you would actually drive to Kosciusko from Jackson, and the reason it
+  // is on this map: the Trace runs Natchez - Jackson - Kosciusko - Tupelo and is
+  // both the direct and the obvious route. Not an interstate, so it draws thin.
+  // Its southern end is a terminus at Natchez, not a border crossing, so like
+  // I-59's Meridian end it is never extended to the state line.
+  {id:"Natchez Trace",pts:[[-91.38,31.55],[-90.99,31.96],[-90.35,32.35],
+    [-90.14,32.43],[-89.98,32.65],[-89.59,33.06],[-89.40,33.29],
+    [-89.12,33.53],[-88.98,33.90],[-88.75,34.28],[-88.119,34.747]]},
   {id:"US 84",pts:[[-91.419,31.56],[-90.44,31.58],[-90.11,31.55],[-89.56,31.64],
     [-89.13,31.69],[-88.64,31.68],[-88.458,31.625]]},
 ];
 
+// Marker-only places: drawn for orientation, with no forecast behind them. They are
+// not in MS_CITIES, so they cost no requests and never reach the table or the
+// ranking — a dot and a name, nothing tappable.
+const MS_PLACES=[
+  {name:"Amory",      lat:33.9846, lon:-88.4887},
+  {name:"Yazoo City", lat:32.8551, lon:-90.4056},
+  {name:"Lucedale",   lat:30.9254, lon:-88.5303},
+];
 const MS_DAYS=7;
 // Mississippi's real boundary and its 82 county lines, both derived from the US
 // Census county polygons: the edges exactly two counties share are the interior
@@ -1795,27 +1816,30 @@ function drawMsMap(rows,date){
   // side puts names straight through neighbouring markers. Each name takes the first
   // of above / below / right / left that clears every marker and every name already
   // placed; the markers all go in as obstacles first so ordering cannot matter.
-  const rr=M?12:11.5, lh=12, pad=2;
+  const rr=M?12:11.5, lh=12, pad=2, pr=2.6;
   const pts=rows.map(r=>({r, x:P.x(r.city.lon), y:P.y(r.city.lat)}));
-  const boxes=pts.map(p=>({x1:p.x-rr,y1:p.y-rr,x2:p.x+rr,y2:p.y+rr}));
+  const plc=MS_PLACES.map(c=>({c, x:P.x(c.lon), y:P.y(c.lat)}));
+  const boxes=pts.map(p=>({x1:p.x-rr,y1:p.y-rr,x2:p.x+rr,y2:p.y+rr}))
+    .concat(plc.map(p=>({x1:p.x-pr,y1:p.y-pr,x2:p.x+pr,y2:p.y+pr})));
   // The strip above `top` belongs to the date caption, so a label may not reach it —
   // Southaven sits within a hundredth of a degree of the state's northern edge and
   // its name landed straight on the caption before this.
   const clear=b=>b.x1>=4&&b.x2<=W-4&&b.y1>=top-1
     &&!boxes.some(o=>!(b.x2<=o.x1||b.x1>=o.x2||b.y2<=o.y1||b.y1>=o.y2));
-  pts.forEach(p=>{
-    const hw=p.r.city.name.length*2.9+3;          // ~5.8px a character at 10.5px
+  const place=(p,name,r,em)=>{
+    const hw=name.length*(em/2)+3;
     p.lab=[
-      {x:p.x, y:p.y-rr-5,  a:"middle", b:{x1:p.x-hw,y1:p.y-rr-5-lh,x2:p.x+hw,y2:p.y-rr-3}},
-      {x:p.x, y:p.y+rr+13, a:"middle", b:{x1:p.x-hw,y1:p.y+rr+3,x2:p.x+hw,y2:p.y+rr+15}},
-      {x:p.x+rr+4, y:p.y+4, a:"start",
-       b:{x1:p.x+rr+3,y1:p.y-6,x2:p.x+rr+5+2*hw,y2:p.y+6}},
-      {x:p.x-rr-4, y:p.y+4, a:"end",
-       b:{x1:p.x-rr-5-2*hw,y1:p.y-6,x2:p.x-rr-3,y2:p.y+6}},
-    ].find(c=>clear(c.b)) || {x:p.x, y:p.y+rr+13, a:"middle",
-       b:{x1:p.x-hw,y1:p.y+rr+3,x2:p.x+hw,y2:p.y+rr+15}};
+      {x:p.x, y:p.y-r-5,  a:"middle", b:{x1:p.x-hw,y1:p.y-r-5-lh,x2:p.x+hw,y2:p.y-r-3}},
+      {x:p.x, y:p.y+r+13, a:"middle", b:{x1:p.x-hw,y1:p.y+r+3,x2:p.x+hw,y2:p.y+r+15}},
+      {x:p.x+r+4, y:p.y+4, a:"start", b:{x1:p.x+r+3,y1:p.y-6,x2:p.x+r+5+2*hw,y2:p.y+6}},
+      {x:p.x-r-4, y:p.y+4, a:"end",   b:{x1:p.x-r-5-2*hw,y1:p.y-6,x2:p.x-r-3,y2:p.y+6}},
+    ].find(c=>clear(c.b)) || {x:p.x, y:p.y+r+13, a:"middle",
+       b:{x1:p.x-hw,y1:p.y+r+3,x2:p.x+hw,y2:p.y+r+15}};
     boxes.push({x1:p.lab.b.x1-pad,y1:p.lab.b.y1-pad,x2:p.lab.b.x2+pad,y2:p.lab.b.y2+pad});
-  });
+  };
+  // Stations first: they carry the numbers, so they get the clear ground.
+  pts.forEach(p=>place(p,p.r.city.name,rr,5.8));
+  plc.forEach(p=>place(p,p.c.name,pr,5));
 
   // Shields go on last and give way to everything: they are placed against the
   // markers and the city names already down, and a route whose badge cannot find a
@@ -1842,7 +1866,11 @@ function drawMsMap(rows,date){
     }
   });
 
-  let s=land+counties+roads+shields;
+  const places=plc.map(p=>`<g class="msplace">`
+    +`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${pr}"/>`
+    +`<text x="${p.lab.x.toFixed(1)}" y="${p.lab.y.toFixed(1)}" `
+    +`text-anchor="${p.lab.a}">${esc(p.c.name)}</text></g>`).join("");
+  let s=land+counties+roads+shields+places;
   pts.forEach(p=>{
     const h=p.r.rec.hi;
     const n=h==null?"—":String(Math.round(h));
