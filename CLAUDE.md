@@ -38,7 +38,7 @@ All keyless. All free tier.
 | Observations | `archive-api.open-meteo.com/v1/archive` | ERA5 reanalysis, ~5-day lag |
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving |
-| Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns ECMWF, GFS, ICON, GEM and the blend, each suffixed with its id; **lazy** — only when a model is driving the chart or the comparison is asked for |
+| Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
 | Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation, then cached in `localStorage` (~380 KB) so it is pulled once per browser rather than once per load |
@@ -50,6 +50,10 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 
 ## Feature map
 
+- **Forecast tab (the landing view)** — every forecast source's daily high, day by day.
+  A chart with the full spread as a band, each model a thin line and the chosen source
+  picked out; a table beneath with every source's high and low plus a spread row. The
+  point is to find the row matching whatever forecast you trust and pick it.
 - **Timeline tab** — temperature (high/low/mean + 25-year normal band), rainfall,
   and two optional panels: soil moisture percentile and solar/UV.
 - **Day condition symbols** — one glyph per day in a row above the panels, from the
@@ -123,6 +127,18 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson reached. An earlier change let NWS take today on the theory that a
   non-observation should defer to NWS; it was reverted, because "not measured" does
   not mean "worse".
+- **The Forecast tab draws a plume, not fourteen coloured lines.** Thirteen equally
+  weighted colours would be unreadable and would need a palette the app does not have.
+  Instead: a band for the full spread, every model a thin muted line, NWS in the today
+  green when it is not the choice, and the chosen source bold with labelled circles.
+  The chart answers "how much do they agree", the table answers "which one is this".
+- **A source that does not cover the point never becomes a row.** `absorbAlt()` drops
+  a model whose arrays are all null, and `fcRows()` only lists maps with entries, so a
+  model with no coverage is absent rather than a row of dashes. Verified by stubbing
+  two models to null and watching 14 sources become 12.
+- **The Forecast tab does not load the normals.** It is the landing view and the
+  normals are a 30-year pull it never reads, so `maybeLoadClim()` is deferred until a
+  tab that needs it. A cold landing is three Open-Meteo calls, not four.
 - **Every Open-Meteo response goes through `grabCached()`.** Reloading used to refetch
   everything, which exhausted the free tier and left the app unable to load *at all* —
   the archive call 429s, `byDate` comes back empty, the city is dropped and no chart
@@ -274,6 +290,10 @@ Changing these without understanding why breaks correctness, not just appearance
   the UI so it travels with the numbers; keep it there.
 - **Soil depth bands differ between archive and forecast models**, which is why the soil
   line stops at today instead of extending into the forecast.
+- **An author `display:` rule beats the browser's `[hidden]`.** `.grp{display:inline-flex}`
+  kept the Day/Week/Month group on screen on tabs that hide it, for as long as the Hot
+  days tab has existed. `.grp[hidden]{display:none}` is now explicit. Anything given a
+  `display` in CSS needs the same treatment before `.hidden` will work on it.
 - **Native `<select>` popups need their own colours.** `color-scheme:dark` on the root
   isn't enough — the popup is a separate surface and will render light text on white.
   `select option` has explicit background/color.

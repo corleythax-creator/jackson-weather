@@ -90,6 +90,8 @@
   .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 0}
   .controls .sep{flex:1}
   .grp{display:inline-flex;gap:0;border:1px solid var(--rule);border-radius:2px;overflow:hidden}
+  /* an author display: rule beats the browser's [hidden], so say it explicitly */
+  .grp[hidden]{display:none}
   .grp button{border:none;border-right:1px solid var(--rule);border-radius:0}
   .grp button:last-child{border-right:none}
   .grp button:hover{border-color:var(--rule);background:rgba(255,255,255,.06)}
@@ -188,6 +190,12 @@
   .stats td .cell{display:block;padding:2px 5px;border-radius:2px}
   .stats td.best .cell{outline:1px solid var(--ink-soft)}
   .stats .foot{color:var(--ink-soft);margin:12px 0 0;max-width:70ch;font-size:13px}
+  .fcthin{fill:none;stroke:var(--ink-soft);stroke-width:1;opacity:.45;stroke-linejoin:round}
+  .fcnws{fill:none;stroke:var(--today);stroke-width:1.8;stroke-linejoin:round}
+  .fcpick2{fill:none;stroke:var(--hot);stroke-width:2.2;stroke-linejoin:round}
+  .stats td .cell b{font-weight:600}
+  .stats td .cell i{display:block;font-style:normal;font-size:11px;color:var(--ink-soft)}
+  .stats td .who{display:block;font-size:11px;color:var(--ink-soft);font-weight:400}
   .stats tr.active td{color:var(--ink)}
   .stats tr.active td:first-child{color:var(--ink);font-weight:600}
 
@@ -226,7 +234,8 @@
 
   <figure id="fig" hidden>
     <div class="tabs" id="tabs" role="tablist">
-      <button data-mode="chart" aria-pressed="true">Timeline</button>
+      <button data-mode="fc" aria-pressed="true">Forecast</button>
+      <button data-mode="chart" aria-pressed="false">Timeline</button>
       <button data-mode="hot" aria-pressed="false">Hot days</button>
     </div>
     <div class="panelpick" id="panelpick" role="tablist" aria-label="Choose a panel"></div>
@@ -329,12 +338,20 @@ const archBase="https://archive-api.open-meteo.com/v1/archive";
 // national models Open-Meteo exposes, so a forecast that disagrees with whatever
 // app you trust can be matched against the model it actually came from.
 const FC_MODELS=[
-  {id:"nws",          label:"NWS (weather.gov)"},
-  {id:"best_match",   label:"Open-Meteo blend"},
-  {id:"ecmwf_ifs04",  label:"ECMWF"},
-  {id:"gfs_seamless", label:"GFS (NOAA)"},
-  {id:"icon_seamless",label:"ICON (DWD)"},
-  {id:"gem_seamless", label:"GEM (Canada)"},
+  {id:"nws",                 label:"NWS",            who:"US National Weather Service"},
+  {id:"ncep_nbm_conus",      label:"NBM",            who:"NOAA National Blend of Models"},
+  {id:"best_match",          label:"Open-Meteo",     who:"Open-Meteo blend"},
+  {id:"ecmwf_ifs025",        label:"ECMWF IFS",      who:"European Centre"},
+  {id:"ecmwf_aifs025_single",label:"ECMWF AIFS",     who:"European Centre, AI model"},
+  {id:"gfs_seamless",        label:"GFS",            who:"NOAA"},
+  {id:"icon_seamless",       label:"ICON",           who:"Deutscher Wetterdienst"},
+  {id:"gem_seamless",        label:"GEM",            who:"Environment Canada"},
+  {id:"meteofrance_seamless",label:"ARPEGE",         who:"Météo-France"},
+  {id:"ukmo_seamless",       label:"UKMO",           who:"UK Met Office"},
+  {id:"jma_seamless",        label:"JMA",            who:"Japan Meteorological Agency"},
+  {id:"kma_seamless",        label:"KMA",            who:"Korea Meteorological Administration"},
+  {id:"cma_grapes_global",   label:"CMA GRAPES",     who:"China Meteorological Administration"},
+  {id:"bom_access_global",   label:"ACCESS-G",       who:"Bureau of Meteorology, Australia"},
 ];
 const ALT_MODELS=FC_MODELS.filter(m=>m.id!=="nws").map(m=>m.id).join(",");
 const FC_SRC_KEY="jw:fcsrc";
@@ -345,7 +362,7 @@ let fcSource=(()=>{
 
 let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
 let soilOn=false, solarOn=false, activePanel="temp", gran="day";
-let mode="chart", thresh=100, selDate=null;
+let mode="fc", thresh=100, selDate=null;   // the forecast comparison is the landing view
 const HOT_CHOICES=[85,90,95,100,105,110];
 
 const $=id=>document.getElementById(id);
@@ -479,7 +496,7 @@ async function addCity(lat,lon,label){
               soilBase:null,soil:null,api:null,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
-  if(cities.includes(city)){ maybeLoadClim(); maybeLoadSoil(); }
+  if(cities.includes(city)){ if(mode!=="fc") maybeLoadClim(); maybeLoadSoil(); }
 }
 
 async function loadCity(city){
@@ -525,7 +542,7 @@ async function loadCity(city){
     try{ city.nwsMap=await nwsForecast(city.lat,city.lon); }catch(e){ city.nwsMap=null; }
   }
   applySource(city);
-  if(IS_CURRENT&&fcSource!=="nws") maybeLoadAlt(city);
+  if(IS_CURRENT&&(mode==="fc"||fcSource!=="nws")) maybeLoadAlt(city);
   // est: on or before today, but not an observation — the ERA5 lag window. Kept
   // because it is the best estimate available, flagged because it is not measured.
   city.byDate.forEach(r=>{ r.est=!r.fc&&r.src!=="archive"; });
@@ -1069,13 +1086,13 @@ function note(html){ $("state").innerHTML=html; $("state").hidden=false; }
 function clearNote(){ $("state").hidden=true; }
 
 function syncButtons(){
-  const chart=mode==="chart";
+  const chart=mode==="chart", fc=mode==="fc";
   $("granpick").hidden=!chart;
-  $("hotctl").hidden=chart;
+  $("hotctl").hidden=mode!=="hot";
   $("panelpick").style.display=chart?"":"none";
   document.querySelectorAll("[data-days]").forEach(b=>b.hidden=!chart);
   $("out").hidden=!chart;
-  $("fcpick").hidden=!(chart&&IS_CURRENT&&cities.length===1);
+  $("fcpick").hidden=!((chart||fc)&&IS_CURRENT&&cities.length===1);
   $("tabs").querySelectorAll("[data-mode]").forEach(b=>
     b.setAttribute("aria-pressed",String(b.dataset.mode===mode)));
 
@@ -1203,6 +1220,128 @@ function bucketSum(map,b){
   let t=0,n=0;
   b.idxs.forEach(i=>{ const v=map.get(DATES[i].slice(5)); if(v!=null){t+=v; n++;} });
   return n?t:null;
+}
+
+/* ---------- forecast comparison ----------
+   Read down a column to see how far apart the world's forecast centres are about one
+   day; read across a row to find the one that matches whatever forecast you trust.
+   The chart shows highs only — that is the number the phone apps put in large type —
+   with the full spread as a band, every model as a thin line, and the chosen source
+   picked out. Lows live in the table, where there is room for them. */
+function fcRows(city){
+  const out=[];
+  const nws=FC_MODELS.find(m=>m.id==="nws");
+  if(city.nwsMap&&city.nwsMap.size) out.push(Object.assign({},nws,{map:city.nwsMap}));
+  FC_MODELS.forEach(m=>{
+    if(m.id==="nws") return;
+    const map=city.alt&&city.alt[m.id];
+    if(map&&map.size) out.push(Object.assign({},m,{map}));   // absent models drop out
+  });
+  return out;
+}
+function fcDates(rows){
+  const out=[];
+  for(let i=TODAY_IDX;i<DATES.length;i++){
+    const t=DATES[i];
+    if(rows.some(r=>r.map.get(t)&&r.map.get(t).hi!=null)) out.push(t);
+  }
+  return out;
+}
+
+function drawFc(){
+  const svg=$("chart"); $("fig").hidden=false;
+  const M=isMobile();
+  const solo=cities.length===1?cities[0]:null;
+  const say=t=>{ svg.setAttribute("viewBox",`0 0 ${M?380:1000} 120`);
+    svg.innerHTML=`<text x="${M?12:20}" y="60" fill="var(--ink-soft)">${t}</text>`;
+    svg._geom=null; $("key").innerHTML=""; $("fcsrc").hidden=true;
+    $("stats").hidden=true; $("hint2").textContent=""; };
+  if(!solo){ say("Drop to one city to compare forecast sources."); 
+    $("stand").innerHTML=`The forecast comparison shows one city at a time.`; return; }
+  if(!IS_CURRENT){ say(`${year} is over — there is no forecast to compare.`);
+    $("stand").innerHTML=`Pick the current year to compare forecasts.`; return; }
+  const rows=fcRows(solo);
+  if(!rows.length){ say(solo.altTried?"The forecast models didn't load.":"Loading forecast models…");
+    $("stand").innerHTML=solo.altTried
+      ? `The models didn't load — Open-Meteo may be rate-limiting this browser.`
+      : `Fetching every forecast source for <b>${esc(solo.label)}</b>…`;
+    return; }
+  const dates=fcDates(rows);
+  if(!dates.length){ say("No forecast days available."); return; }
+
+  const W=M?380:1000, L=M?34:52, R=M?10:16, T=M?30:34, BH=M?250:330;
+  const iw=W-L-R, XLAB=T+BH+22, H=XLAB+(M?16:20);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const X=i=>L+(dates.length<2?iw/2:i*iw/(dates.length-1));
+
+  let lo=Infinity,hi=-Infinity;
+  rows.forEach(r=>dates.forEach(t=>{const v=r.map.get(t);
+    if(v&&v.hi!=null){lo=Math.min(lo,v.hi);hi=Math.max(hi,v.hi);}}));
+  if(!isFinite(lo)){ say("No forecast days available."); return; }
+  const y0=Math.floor((lo-3)/5)*5, y1=Math.ceil((hi+3)/5)*5;
+  const Y=v=>T+BH-(v-y0)/(y1-y0||1)*BH;
+
+  let s="";
+  const step=(y1-y0>40)?10:5;
+  for(let v=y0;v<=y1;v+=step)
+    s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
+      +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}°</text>`;
+
+  // Spread band: how far apart the sources are on each day.
+  const band=dates.map((t,i)=>{
+    const vs=rows.map(r=>r.map.get(t)).filter(v=>v&&v.hi!=null).map(v=>v.hi);
+    return vs.length?{i,min:Math.min(...vs),max:Math.max(...vs),n:vs.length}:null;
+  }).filter(Boolean);
+  if(band.length>1){
+    const top=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.max).toFixed(1)}`);
+    const bot=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.min).toFixed(1)}`);
+    s+=`<polygon class="normalband" points="${top.join(" ")} ${bot.slice().reverse().join(" ")}"/>`;
+  }
+  const line=(r,cls,extra)=>{
+    const pts=dates.map((t,i)=>{const v=r.map.get(t);
+      return (v&&v.hi!=null)?`${X(i).toFixed(1)},${Y(v.hi).toFixed(1)}`:null;}).filter(Boolean);
+    return pts.length>1?`<polyline class="${cls}" ${extra||""} points="${pts.join(" ")}"/>`:"";
+  };
+  rows.forEach(r=>{ if(r.id!==fcSource&&r.id!=="nws") s+=line(r,"fcthin"); });
+  if(fcSource!=="nws"){ const n=rows.find(r=>r.id==="nws"); if(n) s+=line(n,"fcnws"); }
+  const pick=rows.find(r=>r.id===fcSource);
+  if(pick) s+=line(pick,"fcpick2");
+
+  // Today, then a label under every day the axis has room for.
+  const maxLab=M?5:14, lstep=Math.max(1,Math.ceil(dates.length/maxLab));
+  dates.forEach((t,i)=>{
+    if(i%lstep) return;
+    s+=`<line class="monthrule" x1="${X(i).toFixed(1)}" y1="${T}" x2="${X(i).toFixed(1)}" y2="${T+BH}"/>`
+      +`<text x="${X(i).toFixed(1)}" y="${XLAB}" text-anchor="middle">${+t.slice(8)}</text>`;
+  });
+  if(pick){
+    const rr=M?10:11.5, sp=dates.length<2?iw:iw/(dates.length-1);
+    if(sp>=2*rr) dates.forEach((t,i)=>{
+      const v=pick.map.get(t); if(!v||v.hi==null) return;
+      const n=String(Math.round(v.hi)), f=Math.min(M?10:10.5,(2*rr-3)/(n.length*0.6));
+      s+=`<circle cx="${X(i).toFixed(1)}" cy="${Y(v.hi).toFixed(1)}" r="${rr}" fill="var(--paper)" `
+        +`stroke="var(--hot)" stroke-width="1.4"/>`
+        +`<text class="dnode" x="${X(i).toFixed(1)}" y="${(Y(v.hi)+f*0.35).toFixed(1)}" `
+        +`text-anchor="middle" fill="var(--hot)" font-size="${f.toFixed(1)}">${n}</text>`;
+    });
+  }
+  s+=`<text class="panellabel" x="${L}" y="${T-12}">Daily high °F by forecast source</text>`;
+  svg.innerHTML=s; svg._geom=null;
+
+  const worst=band.reduce((a,b)=>Math.max(a,b.max-b.min),0);
+  const pickName=(FC_MODELS.find(m=>m.id===fcSource)||{}).label||fcSource;
+  $("key").innerHTML=`<span><i style="background:var(--hot)"></i>${esc(pickName)}, showing</span>`
+    +(fcSource!=="nws"&&rows.some(r=>r.id==="nws")?`<span><i style="background:var(--today)"></i>NWS</span>`:``)
+    +`<span><i style="background:var(--ink-soft)"></i>Other sources</span>`
+    +`<span><i class="swatch"></i>Full spread</span>`;
+  $("stand").innerHTML=`<b>${esc(solo.label)}</b> — <b>${rows.length}</b> forecast sources over `
+    +`<b>${dates.length}</b> days. They disagree by as much as <b>${worst.toFixed(0)}°F</b> on a `
+    +`single day. The chart is showing <b>${esc(pickName)}</b>; change it with the source menu.`;
+  $("hint2").textContent="Read down a column for how far apart the sources are on one day, "
+    +"across a row to find the one matching a forecast you trust.";
+  $("stats").hidden=true;
+  $("readout").innerHTML=`<span class="stat">Daily high, every source that covers this point.</span>`;
+  renderFcTable(solo,rows,dates);
 }
 
 function drawHot(){
@@ -1617,6 +1756,7 @@ function draw(){
   closeFly();                 // the card is anchored to a bucket; a redraw moves it
   if(!cities.length) return;
   if(mode==="hot") return drawHot();
+  if(mode==="fc") return drawFc();
   const svg=$("chart"); $("fig").hidden=false;
   const M=isMobile();
   const solo=cities.length===1?cities[0]:null;
@@ -1968,7 +2108,7 @@ function draw(){
   else if(selDate&&selB>=0) renderReadout(selB,false);
 
   legend(solo,showSoil,showSolar,M,rainRec); headline(solo); renderStats(showSoil);
-  renderFcSources(solo);
+  $("fcsrc").hidden=true;   // the Forecast tab owns the source table
   // Must not touch anything inside #readout — renderReadout rewrites that whole subtree.
   $("hint2").textContent=(M?"Touch the chart to read a period. Pinch with two fingers to zoom."
                             :"Drag across the chart to zoom. Scroll to zoom, hover to read a period.")
@@ -1978,56 +2118,36 @@ function draw(){
     b.setAttribute("aria-pressed",String(+b.dataset.days===preset)));
 }
 
-// The point of this block: when a forecast disagrees with whatever app you trust,
-// read across and find the row that matches, then pick it above. Highs only — that
-// is what the phone apps put in large type and what people compare.
-function renderFcSources(solo){
+// The table the Forecast tab is built around: every source down the side, every day
+// across the top. Highs are what people compare, so they lead; the overnight low sits
+// under each one. A source that does not cover this point never became a row.
+function renderFcTable(solo,rows,dates){
   const box=$("fcsrc");
-  if(!solo||!IS_CURRENT||mode!=="chart"){ box.hidden=true; return; }
-  const rows=[];
-  if(solo.nwsMap) rows.push({id:"nws",label:"NWS (weather.gov)",map:solo.nwsMap});
-  FC_MODELS.forEach(m=>{
-    if(m.id!=="nws"&&solo.alt&&solo.alt[m.id]) rows.push({id:m.id,label:m.label,map:solo.alt[m.id]});
-  });
-  if(rows.length<2){
-    // The models are a separate request, deliberately not made unless wanted.
-    box.innerHTML=`<h2>Forecast sources</h2><p class="lede">`
-      +(solo.altTried
-        ? `The model comparison didn't load — Open-Meteo may be rate-limiting this browser.`
-        : `The chart is showing <b>${esc((FC_MODELS.find(m=>m.id===fcSource)||{}).label||fcSource)}</b>. `
-          +`Load the other forecast models to compare them day by day and pick whichever `
-          +`matches the forecast you trust.`)
-      +`</p>`+(solo.altTried?``:`<button id="altbtn" type="button">Compare forecast sources</button>`);
-    box.hidden=false;
-    const btn=$("altbtn");
-    if(btn) btn.onclick=()=>{ btn.disabled=true; btn.textContent="Loading\u2026"; maybeLoadAlt(solo); };
-    return;
-  }
-  const dates=[];
-  for(let i=TODAY_IDX+1;i<DATES.length&&dates.length<7;i++) dates.push(DATES[i]);
-  if(!dates.length){ box.hidden=true; return; }
   const cell=(r,t)=>{
     const v=r.map.get(t);
-    return `<td>${v&&v.hi!=null?Math.round(v.hi)+"°":"—"}</td>`;
+    if(!v||v.hi==null) return `<td>&mdash;</td>`;
+    return `<td><span class="cell"><b>${Math.round(v.hi)}°</b>`
+      +(v.lo!=null?`<i>${Math.round(v.lo)}°</i>`:``)+`</span></td>`;
   };
-  const spread=dates.map(t=>{
+  const span=dates.map(t=>{
     const vs=rows.map(r=>r.map.get(t)).filter(v=>v&&v.hi!=null).map(v=>v.hi);
     return vs.length>1?Math.max(...vs)-Math.min(...vs):0;
   });
-  const worst=Math.max(...spread);
-  box.innerHTML=`<h2>Forecast sources for ${esc(solo.label)}</h2>`
-    +`<p class="lede">Daily high by source. They disagree by up to `
-    +`<b>${worst.toFixed(0)}°F</b> over the next ${dates.length} days. Find the row that `
-    +`matches the forecast you trust and pick it from the <b>forecast source</b> menu — `
-    +`the choice sticks on this browser.</p>`
-    +`<div class="scroller"><table><thead><tr><th></th>`
+  box.innerHTML=`<h2>Every forecast source, day by day</h2>`
+    +`<p class="lede">Daily high, with the overnight low beneath it. `
+    +`Find the row that matches the forecast you trust and pick it from the `
+    +`<b>source menu</b> above — the chart follows it and the choice sticks on this browser.</p>`
+    +`<div class="scroller"><table><thead><tr><th>Source</th>`
     +dates.map(t=>`<th>${pretty(t)}</th>`).join("")+`</tr></thead><tbody>`
     +rows.map(r=>`<tr${r.id===fcSource?' class="active"':''}>`
-      +`<td>${esc(r.label)}${r.id===fcSource?" &middot; showing":""}</td>`
+      +`<td>${esc(r.label)}<span class="who">${esc(r.who||"")}</span></td>`
       +dates.map(t=>cell(r,t)).join("")+`</tr>`).join("")
+    +`<tr><td>Spread<span class="who">warmest minus coolest</span></td>`
+    +span.map(v=>`<td>${v?v.toFixed(0)+"°":"—"}</td>`).join("")+`</tr>`
     +`</tbody></table></div>`
-    +`<p class="foot">NWS publishes about seven days; Open-Meteo's models run to `
-    +`${FC_DAYS}. Beyond whichever source is chosen, the blend fills the rest.</p>`;
+    +`<p class="foot">NWS publishes about seven days and NBM sixteen; the global models `
+    +`run to ${FC_DAYS}. A blank cell means that source does not reach that day. `
+    +`Every model arrives in one request, so the whole table costs a single call.</p>`;
   box.hidden=false;
 }
 
@@ -2232,7 +2352,9 @@ function headline(solo){
     mode=b.dataset.mode;
     // Loads fire before draw(), never after — see CLAUDE.md. The hot-days view wants
     // the normals response for its monthly average and the long archive for records.
-    if(mode==="hot"){ maybeLoadClim(); maybeLoadHist(cities.length===1?cities[0]:null); }
+    if(mode!=="fc") maybeLoadClim();          // the Forecast tab needs no normals
+    if(mode==="hot") maybeLoadHist(cities.length===1?cities[0]:null);
+    if(mode==="fc") maybeLoadAlt(cities.length===1?cities[0]:null);
     syncButtons(); draw();
   });
   $("yearpick").innerHTML=(()=>{
