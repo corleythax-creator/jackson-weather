@@ -267,6 +267,15 @@ Changing these without understanding why breaks correctness, not just appearance
   state's northern edge and its name landed on the caption before that rule. The
   harness asserts no name overlaps another name or another city's marker; placement
   depends only on coordinates and name length, so checking one day checks all seven.
+- **The number inside a map marker is pure black, and that is a measured value.**
+  The markers are solid ramp colours at full opacity, which is a much harder
+  background than the table's 50%-alpha tint. Measured across the ramp at 5% steps:
+  `--ink-soft` gives 1.00:1 at the middle (invisible), `--ink` 2.15:1, white 2.56:1,
+  and a dark grey like #10191F 3.89:1 at the hot end. Picking black-or-white per
+  marker still bottoms out at 4.26:1 around the crossover. Plain **#000 is the only
+  single colour that clears 4.5:1 on every stop**, worst case 4.60:1 on the hottest
+  red. Do not soften it to a dark grey to match the page furniture — that is exactly
+  the change that fails.
 - **The map carries the high only.** A low under every marker was a third line of text
   per city and it pushed the names into each other. The low is in the ranking beside
   the map, in the table and in the breakdown; the map answers "where is it hot today"
@@ -447,6 +456,18 @@ Changing these without understanding why breaks correctness, not just appearance
 
 ## Gotchas
 
+- **An SVG `fill="..."` attribute loses to *any* CSS rule, and this stylesheet has
+  one.** `text{fill:var(--ink-soft)}` at the top of the CSS beats every
+  `<text ... fill="var(--hot)">` in the file, because a presentation attribute sits
+  below all author CSS in the cascade. That silently painted every labelled circle on
+  the Forecast, Timeline and Verification charts grey instead of its accent colour,
+  the hot-days counts, the fly-out's year label and the solar/UV axis — and on the new
+  map it put 1.04:1 grey numbers on grey markers. Colour a label with an inline
+  `style="fill:..."`, which does win, never with the attribute. Nothing in the
+  existing checks catches this: it parses, the element exists, and the attribute is
+  right there in the DOM. Only `getComputedStyle(el).fill` shows it, so that is what
+  the harness now asserts. The same trap as `.grp` and `.key` with `[hidden]`, one
+  layer down.
 - **Never let `draw()` touch anything inside `#readout`.** `renderReadout()` replaces
   that subtree. A previous bug put an element there, which `draw()` then threw on after
   the first hover — silently killing the soil button's handler, because the throw
@@ -549,6 +570,10 @@ node --check /tmp/app.js
 grep -o '\$("[a-zA-Z0-9_]*")' index.html | sort -u
 grep -o 'id="[a-zA-Z0-9_]*"' index.html | sort -u
 ```
+
+For anything with a colour on it, read the *painted* value back out of the browser
+(`getComputedStyle(el).fill`) and compute the contrast ratio, rather than trusting the
+markup — an attribute that the cascade throws away looks perfectly correct in the DOM.
 
 For anything computational — bucket coverage, lag detection, hot-day counting, label
 spacing — copy the function into a scratch `.js` file and run it against synthetic data
