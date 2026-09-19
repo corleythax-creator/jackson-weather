@@ -302,8 +302,8 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson, so it is the route that answers "how would I get there". It is a parkway
   rather than an interstate, so it draws in the thinner US-highway style.
 - **`MS_PLACES` are markers with no forecast behind them.** Bruce, Amory, Houston,
-  Eupora, Starkville, Louisville, Macon, Yazoo City, Vicksburg, Raleigh, Bude and
-  Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
+  Eupora, Starkville, Belzoni, Louisville, Macon, Rolling Fork, Yazoo City,
+  Vicksburg, Raleigh, Bude and Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
   deliberately unlike a station so a reader cannot mistake one for a station whose
   number failed to load. They are not in `MS_CITIES`, so they cost no requests and
   never reach the table, the ranking or the breakdown, and nothing about them is
@@ -330,10 +330,21 @@ Changing these without understanding why breaks correctness, not just appearance
   its name above the dot; and on a phone Starkville is boxed in by Columbus's marker
   about 28px east and Eupora's already-placed name to the north-west. All eight are
   then tried again pushed 7px out, and again at 14px, before a place is given up on.
-  That second ring is what keeps Starkville drawn on the phone map once twelve places
-  are competing, and in practice nothing lands more than about 20px from its dot, so
-  a label still reads as belonging to the nearest one. Shrinking the place font (now
-  7px) was not enough on its own for any of it. On a phone Starkville's name sits
+  That second ring is what keeps Starkville drawn on the phone map once a dozen
+  places are competing, and in practice nothing lands more than about 20px from its
+  dot, so a label still reads as belonging to the nearest one. Shrinking the place
+  font (now 7px) was not enough on its own for any of it.
+- **For a place, *every* raised ring outranks dropping below the dot.** The candidate
+  list is built across all three rings and then reordered so the nine raised
+  positions come first: pushing a name a few pixels further out reads better than
+  flipping it to the other side. A station keeps the simple order, because its label
+  is bigger and a long push would detach it from the number.
+- **`pad` is 1px, and that is deliberate.** `hw` already extends 3px past the text on
+  each side, so two labels whose boxes merely touch still have 6px of clear air
+  between them; `pad` adds to that when a placed label becomes an obstacle. It was
+  2px, which put 10px between neighbours and blocked Houston's "above" against
+  Bruce's name by half a pixel. Now that widths are measured rather than estimated,
+  1px is enough — but do not take it to 0, or names will render edge to edge. On a phone Starkville's name sits
   below its dot rather than above: the map is 83px per degree there against 99.5 on a
   desktop, so Columbus's marker is proportionally closer and "above" misses by about
   half a pixel. A name below the dot beats a name touching a marker, so that is left

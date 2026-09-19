@@ -529,6 +529,8 @@ const MS_ROADS=[
 // a dot with no name tells a reader nothing anyway.
 const MS_PLACES=[
   {name:"Amory",      lat:33.9846, lon:-88.4887},
+  {name:"Belzoni",    lat:33.1806, lon:-90.4894},
+  {name:"Rolling Fork",lat:32.9047,lon:-90.8761},
   {name:"Bruce",      lat:33.9917, lon:-89.3486},
   {name:"Houston",    lat:33.8984, lon:-88.9994},
   {name:"Eupora",     lat:33.5426, lon:-89.2665},
@@ -1840,7 +1842,7 @@ function drawMsMap(rows,date){
   // side puts names straight through neighbouring markers. Each name takes the first
   // of above / below / right / left that clears every marker and every name already
   // placed; the markers all go in as obstacles first so ordering cannot matter.
-  const rr=M?12:11.5, lh=12, pad=2, pr=2.6;
+  const rr=M?12:11.5, lh=12, pad=1, pr=2.6;
   const pts=rows.map(r=>({r, x:P.x(r.city.lon), y:P.y(r.city.lat)}));
   const plc=MS_PLACES.map(c=>({c, x:P.x(c.lon), y:P.y(c.lat)}));
   const boxes=pts.map(p=>({x1:p.x-rr,y1:p.y-rr,x2:p.x+rr,y2:p.y+rr}))
@@ -1852,36 +1854,40 @@ function drawMsMap(rows,date){
     &&!boxes.some(o=>!(b.x2<=o.x1||b.x1>=o.x2||b.y2<=o.y1||b.y1>=o.y2));
   const place=(p,name,r,px,tl,gap0,raised)=>{
     const hw=textW(name,px)/2+3;
-    // Every position is tried close in, then again pushed further out. A name a few
-    // pixels off its dot still reads as belonging to the nearest one, and is much
-    // better than the place being dropped for want of room.
-    for(const gap of (raised?[gap0,gap0+7,gap0+14]:[gap0])){
-    const up={x:p.x, y:p.y-r-gap, a:"middle",
-      b:{x1:p.x-hw,y1:p.y-r-gap-tl,x2:p.x+hw,y2:p.y-r-gap+tl*0.25}};
-    const down={x:p.x, y:p.y+r+gap+tl, a:"middle",
-      b:{x1:p.x-hw,y1:p.y+r+gap,x2:p.x+hw,y2:p.y+r+gap+tl+2}};
-    const right={x:p.x+r+4, y:p.y+4, a:"start",
-      b:{x1:p.x+r+3,y1:p.y-6,x2:p.x+r+5+2*hw,y2:p.y+6}};
-    const left={x:p.x-r-4, y:p.y+4, a:"end",
-      b:{x1:p.x-r-5-2*hw,y1:p.y-6,x2:p.x-r-3,y2:p.y+6}};
-    // Sliding the name sideways while keeping it raised clears a neighbouring
-    // marker without giving up on "above" — which is what Amory needs past Tupelo.
-    const upR={x:p.x+3, y:up.y, a:"start",
-      b:{x1:p.x+2,y1:up.b.y1,x2:p.x+4+2*hw,y2:up.b.y2}};
-    const upL={x:p.x-3, y:up.y, a:"end",
-      b:{x1:p.x-4-2*hw,y1:up.b.y1,x2:p.x-2,y2:up.b.y2}};
-    const downR={x:p.x+3, y:down.y, a:"start",
-      b:{x1:p.x+2,y1:down.b.y1,x2:p.x+4+2*hw,y2:down.b.y2}};
-    const downL={x:p.x-3, y:down.y, a:"end",
-      b:{x1:p.x-4-2*hw,y1:down.b.y1,x2:p.x-2,y2:down.b.y2}};
-    const order=raised?[up,upR,upL,down,downR,downL,right,left]:[up,down,right,left];
+    const at=gap=>{
+      const up={x:p.x, y:p.y-r-gap, a:"middle",
+        b:{x1:p.x-hw,y1:p.y-r-gap-tl,x2:p.x+hw,y2:p.y-r-gap+tl*0.25}};
+      const down={x:p.x, y:p.y+r+gap+tl, a:"middle",
+        b:{x1:p.x-hw,y1:p.y+r+gap,x2:p.x+hw,y2:p.y+r+gap+tl+2}};
+      const right={x:p.x+r+gap+1, y:p.y+4, a:"start",
+        b:{x1:p.x+r+gap,y1:p.y-6,x2:p.x+r+gap+2+2*hw,y2:p.y+6}};
+      const left={x:p.x-r-gap-1, y:p.y+4, a:"end",
+        b:{x1:p.x-r-gap-2-2*hw,y1:p.y-6,x2:p.x-r-gap,y2:p.y+6}};
+      // Sliding the name sideways while keeping it raised clears a neighbouring
+      // marker without giving up on "above" — which is what Amory needs past Tupelo.
+      const upR={x:p.x+3, y:up.y, a:"start",
+        b:{x1:p.x+2,y1:up.b.y1,x2:p.x+4+2*hw,y2:up.b.y2}};
+      const upL={x:p.x-3, y:up.y, a:"end",
+        b:{x1:p.x-4-2*hw,y1:up.b.y1,x2:p.x-2,y2:up.b.y2}};
+      return {raised:[up,upR,upL], rest:[down,downR(down),downL(down),right,left]};
+    };
+    const downR=d=>({x:p.x+3, y:d.y, a:"start",
+      b:{x1:p.x+2,y1:d.b.y1,x2:p.x+4+2*hw,y2:d.b.y2}});
+    const downL=d=>({x:p.x-3, y:d.y, a:"end",
+      b:{x1:p.x-4-2*hw,y1:d.b.y1,x2:p.x-2,y2:d.b.y2}});
+    // A name above its dot is the house preference, so for a place *every* raised
+    // ring is tried before anything is allowed to drop below it: pushing a label a
+    // few pixels further out reads better than flipping it to the other side.
+    const rings=raised?[gap0,gap0+7,gap0+14]:[gap0];
+    const sets=rings.map(at);
+    const order=raised
+      ? sets.flatMap(x=>x.raised).concat(sets.flatMap(x=>x.rest))
+      : [sets[0].raised[0], ...sets[0].rest];
     const fit=order.find(c=>clear(c.b));
-    if(!fit){ if(raised) continue; p.lab=down; }   // a station always draws, number first
-    else p.lab=fit;
+    if(!fit&&raised) return false;         // nowhere clear at any distance
+    p.lab=fit||sets[0].rest[0];            // a station always draws, number first
     boxes.push({x1:p.lab.b.x1-pad,y1:p.lab.b.y1-pad,x2:p.lab.b.x2+pad,y2:p.lab.b.y2+pad});
     return true;
-    }
-    return false;                            // nowhere clear at any distance
   };
   // Stations first: they carry the numbers, so they get the clear ground.
   pts.forEach(p=>place(p,p.r.city.name,rr,10.5,lh,5));
