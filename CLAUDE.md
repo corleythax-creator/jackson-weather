@@ -316,6 +316,13 @@ Changing these without understanding why breaks correctness, not just appearance
   the stations carry the numbers so they get the clear ground and a place name gives
   way. All twelve markers and all five place dots are obstacles before any label is
   placed, so order within each group cannot change the result.
+- **Label widths are measured, not estimated.** `textW()` sizes a name with a cached
+  canvas 2D context at the same font, because a px-per-character guess was rejecting
+  positions that were in fact clear: at 4.2px/char it made "Starkville" a 48px box
+  around 31px of text, which is why that name sat below-left of its dot with open
+  space above it. Two labels had already been nudged by hand-tuning that constant
+  before it was worth measuring instead. There is a `str.length * px * 0.52` fallback
+  if canvas is unavailable, which is the only path that can still misjudge a box.
 - **A place label can slide sideways, above *or* below.** Places try eight positions
   — above, above-right, above-left, below, below-right, below-left, right, left —
   where a station tries four. None of this is decoration. Amory's plain "above" box
@@ -323,7 +330,11 @@ Changing these without understanding why breaks correctness, not just appearance
   its name above the dot; and on a phone Starkville is boxed in by Columbus's marker
   27.6px east and Eupora's already-placed name to the north-west, so the
   below-shifted pair is the only thing that fits it at all. Shrinking the place font
-  to 7.5px was not enough on its own for either.
+  (now 7px) was not enough on its own for either. On a phone Starkville's name still
+  sits below its dot: the map is 83px per degree there against 99.5 on a desktop, so
+  Columbus's marker is proportionally closer and "above" misses by about half a
+  pixel. A name below the dot is better than a name touching a marker, so that is
+  left alone rather than tuned to the pixel.
 - **A place that cannot be placed clear is dropped, not drawn on top.** `place()`
   returns false when no candidate clears, and `drawMs()` renders only the places that
   fit. A station always draws — it carries a number, so it falls back to below and

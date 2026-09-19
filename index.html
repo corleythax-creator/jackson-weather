@@ -175,7 +175,7 @@
   /* A place with no forecast behind it: a smaller, quieter dot and name, so it reads
      as orientation rather than as a station whose number failed to load. */
   .msplace circle{fill:var(--ink-soft);opacity:.55}
-  .msplace text{fill:var(--ink-soft);opacity:.75;font-size:7.5px}
+  .msplace text{fill:var(--ink-soft);opacity:.75;font-size:7px}
   .mslo{fill:var(--ink-soft);font-size:9.5px}
   .msrank text{font-size:12px}
 
@@ -1799,6 +1799,16 @@ function msProject(box){
   };
 }
 
+const UI_FONT='-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
+let _tc=null;
+function textW(str,px){
+  try{
+    if(!_tc) _tc=document.createElement("canvas").getContext("2d");
+    if(_tc){ _tc.font=`${px}px ${UI_FONT}`; return _tc.measureText(str).width; }
+  }catch(e){}
+  return str.length*px*0.52;                 // only if canvas is unavailable
+}
+
 function drawMsMap(rows,date){
   const M=isMobile();
   const W=M?380:1000;
@@ -1835,8 +1845,8 @@ function drawMsMap(rows,date){
   // its name landed straight on the caption before this.
   const clear=b=>b.x1>=4&&b.x2<=W-4&&b.y1>=top-1
     &&!boxes.some(o=>!(b.x2<=o.x1||b.x1>=o.x2||b.y2<=o.y1||b.y1>=o.y2));
-  const place=(p,name,r,em,tl,gap,raised)=>{
-    const hw=name.length*(em/2)+3;
+  const place=(p,name,r,px,tl,gap,raised)=>{
+    const hw=textW(name,px)/2+3;
     const up={x:p.x, y:p.y-r-gap, a:"middle",
       b:{x1:p.x-hw,y1:p.y-r-gap-tl,x2:p.x+hw,y2:p.y-r-gap+tl*0.25}};
     const down={x:p.x, y:p.y+r+gap+tl, a:"middle",
@@ -1863,8 +1873,8 @@ function drawMsMap(rows,date){
     return true;
   };
   // Stations first: they carry the numbers, so they get the clear ground.
-  pts.forEach(p=>place(p,p.r.city.name,rr,5.8,lh,5));
-  const shown=plc.filter(p=>place(p,p.c.name,pr,4.2,9,3.5,true));
+  pts.forEach(p=>place(p,p.r.city.name,rr,10.5,lh,5));
+  const shown=plc.filter(p=>place(p,p.c.name,pr,7,9,3.5,true));
 
   // Shields go on last and give way to everything: they are placed against the
   // markers and the city names already down, and a route whose badge cannot find a
