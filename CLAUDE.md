@@ -32,7 +32,8 @@ All keyless. All free tier.
 |---|---|---|
 | Observations | `archive-api.open-meteo.com/v1/archive` | ERA5 reanalysis, ~5-day lag |
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
-| **US forecast (authoritative)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL |
+| **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving |
+| Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one extra call returns ECMWF, GFS, ICON, GEM and the blend, each suffixed with its id |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
 | Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation, then cached in `localStorage` (~380 KB) so it is pulled once per browser rather than once per load |
@@ -61,6 +62,11 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 - **Rainfall records** — the same encoding on the Timeline's rain panel: dashed
   outlines for the wettest and driest years in the full archive, at week and month
   aggregation only.
+- **Forecast source picker** — the chart's forecast days can be driven by NWS
+  (default) or by any of the raw models Open-Meteo exposes. A comparison table under
+  the chart shows every source's daily high side by side, so a forecast that
+  disagrees with whatever app you trust can be matched to the model it came from.
+  The choice persists per browser.
 - **City search** — up to 5 cities. One city gets the full detail view; two or more
   switches to comparison (mean lines + cumulative rainfall).
 - **Year picker** — 2000 to current year.
@@ -112,6 +118,11 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson reached. An earlier change let NWS take today on the theory that a
   non-observation should defer to NWS; it was reverted, because "not measured" does
   not mean "worse".
+- **Every forecast source keeps its own map, so switching is lossless.** `applySource()`
+  lays the chosen source over the forecast days from `city.nwsMap` or `city.alt[id]`;
+  nothing is overwritten irrecoverably, so flipping the picker needs no refetch. NWS
+  is fetched on every load even when it is not driving, because the comparison table
+  has to be able to show it. Sources only ever touch days after `OBS_END`.
 - **Observed beats modelled.** Where archive and forecast overlap, the archive wins —
   *except* UV index and precipitation probability, which the archive doesn't carry, so
   they're merged onto the archive record. See `absorb()`.

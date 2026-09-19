@@ -188,6 +188,8 @@
   .stats td .cell{display:block;padding:2px 5px;border-radius:2px}
   .stats td.best .cell{outline:1px solid var(--ink-soft)}
   .stats .foot{color:var(--ink-soft);margin:12px 0 0;max-width:70ch;font-size:13px}
+  .stats tr.active td{color:var(--ink)}
+  .stats tr.active td:first-child{color:var(--ink);font-weight:600}
 
   footer{margin-top:30px;padding-top:16px;border-top:1px solid var(--rule);
     font-size:13px;color:var(--ink-soft);display:flex;flex-wrap:wrap;gap:14px;align-items:center}
@@ -232,8 +234,10 @@
     <svg id="chart" viewBox="0 0 1000 512" role="img" aria-labelledby="head"></svg>
     <div class="flyout" id="flyout" hidden></div>
     <div class="key" id="key"></div>
+    <div class="stats" id="fcsrc" hidden></div>
     <div class="controls">
       <select id="yearpick" aria-label="Year"></select>
+      <select id="fcpick" aria-label="Forecast source" hidden></select>
       <span id="hotctl" hidden>
         <label for="thresh" style="color:var(--ink-soft);font-size:13.5px;margin-right:6px">Days at or above</label>
         <select id="thresh" aria-label="Temperature threshold"></select>
@@ -321,6 +325,23 @@ const units="&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto"
 const varsA="&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,shortwave_radiation_sum,weather_code";
 const varsF=varsA+",uv_index_max,precipitation_probability_max";
 const archBase="https://archive-api.open-meteo.com/v1/archive";
+// Which forecast drives the chart. NWS is the US default; the rest are the raw
+// national models Open-Meteo exposes, so a forecast that disagrees with whatever
+// app you trust can be matched against the model it actually came from.
+const FC_MODELS=[
+  {id:"nws",          label:"NWS (weather.gov)"},
+  {id:"best_match",   label:"Open-Meteo blend"},
+  {id:"ecmwf_ifs04",  label:"ECMWF"},
+  {id:"gfs_seamless", label:"GFS (NOAA)"},
+  {id:"icon_seamless",label:"ICON (DWD)"},
+  {id:"gem_seamless", label:"GEM (Canada)"},
+];
+const ALT_MODELS=FC_MODELS.filter(m=>m.id!=="nws").map(m=>m.id).join(",");
+const FC_SRC_KEY="jw:fcsrc";
+let fcSource=(()=>{
+  try{ const v=localStorage.getItem(FC_SRC_KEY);
+       return FC_MODELS.some(m=>m.id===v)?v:"nws"; }catch(e){ return "nws"; }
+})();
 
 let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
 let soilOn=false, solarOn=false, activePanel="temp", gran="day";
@@ -472,6 +493,10 @@ async function loadCity(city){
     +`&start_date=${START}&end_date=${OBS_END}${varsA}${units}`)];
   if(IS_CURRENT) reqs.push(grab(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}`
     +`&longitude=${city.lon}${varsF}${units}&past_days=14&forecast_days=${FC_DAYS}`));
+  // Every candidate model in one request, so the comparison costs a single call.
+  if(IS_CURRENT) reqs.push(grab(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}`
+    +`&longitude=${city.lon}&daily=temperature_2m_max,temperature_2m_min${units}`
+    +`&forecast_days=${FC_DAYS}&models=${ALT_MODELS}`));
 
   const res=await Promise.allSettled(reqs);
   if(res[0].status==="fulfilled") absorb(city,res[0].value,"archive");
@@ -480,6 +505,8 @@ async function loadCity(city){
   city.obsEnd=null;
   city.byDate.forEach((r,t)=>{ if(r.src==="archive"&&(!city.obsEnd||t>city.obsEnd)) city.obsEnd=t; });
   if(res[1]&&res[1].status==="fulfilled") absorb(city,res[1].value,"model");
+  city.alt={};
+  if(res[2]&&res[2].status==="fulfilled") absorbAlt(city,res[2].value);
 
   city.loading=false;
   if(!city.byDate.size){
@@ -488,14 +515,13 @@ async function loadCity(city){
     note(`Couldn't load ${esc(city.label)} for ${year}${why?` — <code>${esc(why)}</code>`:""}.`);
     return;
   }
-  city.nwsDays=0;
+  city.nwsDays=0; city.nwsMap=null;
   if(IS_CURRENT){
+    // Fetched even when another source is driving, so the comparison can show it.
     // Non-US points return 404 here; the model blend just stays in place.
-    try{
-      const nws=await nwsForecast(city.lat,city.lon);
-      if(nws) applyNws(city,nws);
-    }catch(e){ city.nwsDays=0; }
+    try{ city.nwsMap=await nwsForecast(city.lat,city.lon); }catch(e){ city.nwsMap=null; }
   }
+  applySource(city);
   // est: on or before today, but not an observation — the ERA5 lag window. Kept
   // because it is the best estimate available, flagged because it is not measured.
   city.byDate.forEach(r=>{ r.est=!r.fc&&r.src!=="archive"; });
@@ -534,6 +560,34 @@ function absorb(city,json,tag){
     city.byDate.set(t,{date:t,hi,lo,mean:mn==null?(hi+lo)/2:mn,pr,
       solar:sr==null?null:sr/3.6, uv, pop, wc, src:tag, fc:t>OBS_END});
   });
+}
+
+// Open-Meteo suffixes each model's arrays with its id when several are requested.
+function absorbAlt(city,json){
+  const d=json&&json.daily; if(!d||!d.time) return;
+  FC_MODELS.forEach(m=>{
+    if(m.id==="nws") return;
+    const hi=d[`temperature_2m_max_${m.id}`], lo=d[`temperature_2m_min_${m.id}`];
+    if(!hi||!lo) return;                       // a model can be absent for a location
+    const map=new Map();
+    d.time.forEach((t,i)=>{ if(hi[i]!=null&&lo[i]!=null) map.set(t,{hi:hi[i],lo:lo[i]}); });
+    if(map.size) city.alt[m.id]=map;
+  });
+}
+
+// Lays the chosen source over the forecast days. Every source keeps its own map, so
+// switching back and forth is lossless — nothing is overwritten irrecoverably.
+function applySource(city){
+  city.nwsDays=0; city.srcDays=0;
+  if(fcSource==="nws"){ if(city.nwsMap) applyNws(city,city.nwsMap); return; }
+  const map=city.alt&&city.alt[fcSource]; if(!map) return;
+  let n=0;
+  map.forEach((v,d)=>{
+    if(d<=OBS_END) return;                     // never overwrite an observation
+    const r=city.byDate.get(d); if(!r) return;
+    r.hi=v.hi; r.lo=v.lo; r.mean=(v.hi+v.lo)/2; r.src=fcSource; n++;
+  });
+  city.srcDays=n;
 }
 
 // NWS is the authoritative US forecast and is what weather.com / Weather Underground
@@ -953,6 +1007,7 @@ function syncButtons(){
   $("panelpick").style.display=chart?"":"none";
   document.querySelectorAll("[data-days]").forEach(b=>b.hidden=!chart);
   $("out").hidden=!chart;
+  $("fcpick").hidden=!(chart&&IS_CURRENT&&cities.length===1);
   $("tabs").querySelectorAll("[data-mode]").forEach(b=>
     b.setAttribute("aria-pressed",String(b.dataset.mode===mode)));
 
@@ -1845,6 +1900,7 @@ function draw(){
   else if(selDate&&selB>=0) renderReadout(selB,false);
 
   legend(solo,showSoil,showSolar,M,rainRec); headline(solo); renderStats(showSoil);
+  renderFcSources(solo);
   // Must not touch anything inside #readout — renderReadout rewrites that whole subtree.
   $("hint2").textContent=(M?"Touch the chart to read a period. Pinch with two fingers to zoom."
                             :"Drag across the chart to zoom. Scroll to zoom, hover to read a period.")
@@ -1852,6 +1908,46 @@ function draw(){
     +(M&&list.length===1?" One panel at a time — switch above.":"");
   document.querySelectorAll("[data-days]").forEach(b=>
     b.setAttribute("aria-pressed",String(+b.dataset.days===preset)));
+}
+
+// The point of this block: when a forecast disagrees with whatever app you trust,
+// read across and find the row that matches, then pick it above. Highs only — that
+// is what the phone apps put in large type and what people compare.
+function renderFcSources(solo){
+  const box=$("fcsrc");
+  if(!solo||!IS_CURRENT||mode!=="chart"){ box.hidden=true; return; }
+  const rows=[];
+  if(solo.nwsMap) rows.push({id:"nws",label:"NWS (weather.gov)",map:solo.nwsMap});
+  FC_MODELS.forEach(m=>{
+    if(m.id!=="nws"&&solo.alt&&solo.alt[m.id]) rows.push({id:m.id,label:m.label,map:solo.alt[m.id]});
+  });
+  if(rows.length<2){ box.hidden=true; return; }        // nothing to compare against
+  const dates=[];
+  for(let i=TODAY_IDX+1;i<DATES.length&&dates.length<7;i++) dates.push(DATES[i]);
+  if(!dates.length){ box.hidden=true; return; }
+  const cell=(r,t)=>{
+    const v=r.map.get(t);
+    return `<td>${v&&v.hi!=null?Math.round(v.hi)+"°":"—"}</td>`;
+  };
+  const spread=dates.map(t=>{
+    const vs=rows.map(r=>r.map.get(t)).filter(v=>v&&v.hi!=null).map(v=>v.hi);
+    return vs.length>1?Math.max(...vs)-Math.min(...vs):0;
+  });
+  const worst=Math.max(...spread);
+  box.innerHTML=`<h2>Forecast sources for ${esc(solo.label)}</h2>`
+    +`<p class="lede">Daily high by source. They disagree by up to `
+    +`<b>${worst.toFixed(0)}°F</b> over the next ${dates.length} days. Find the row that `
+    +`matches the forecast you trust and pick it from the <b>forecast source</b> menu — `
+    +`the choice sticks on this browser.</p>`
+    +`<div class="scroller"><table><thead><tr><th></th>`
+    +dates.map(t=>`<th>${pretty(t)}</th>`).join("")+`</tr></thead><tbody>`
+    +rows.map(r=>`<tr${r.id===fcSource?' class="active"':''}>`
+      +`<td>${esc(r.label)}${r.id===fcSource?" &middot; showing":""}</td>`
+      +dates.map(t=>cell(r,t)).join("")+`</tr>`).join("")
+    +`</tbody></table></div>`
+    +`<p class="foot">NWS publishes about seven days; Open-Meteo's models run to `
+    +`${FC_DAYS}. Beyond whichever source is chosen, the blend fills the rest.</p>`;
+  box.hidden=false;
 }
 
 function legend(solo,showSoil,showSolar,M,rainRec){
@@ -1927,8 +2023,14 @@ function headline(solo){
         +(solo1.estDays?`; the ${solo1.estDays} day${solo1.estDays===1?"":"s"} after that are `
           +`model estimates while ERA5 catches up. `:`. `)
       : "")
-    +((solo1&&solo1.nwsDays)?`Forecast: National Weather Service (${solo1.nwsDays} days), Open-Meteo beyond. `
-                            :"Forecast: Open-Meteo multi-model — NWS did not answer. ")
+    +(()=>{
+      const m=FC_MODELS.find(x=>x.id===fcSource), name=m?m.label:fcSource;
+      if(fcSource==="nws")
+        return (solo1&&solo1.nwsDays)?`Forecast: ${name} (${solo1.nwsDays} days), Open-Meteo beyond. `
+                                     :"Forecast: Open-Meteo multi-model — NWS did not answer. ";
+      return (solo1&&solo1.srcDays)?`Forecast: ${name}, your chosen source (${solo1.srcDays} days). `
+                                   :`Forecast: ${name} did not answer — Open-Meteo blend in place. `;
+    })()
     +"Search: Open-Meteo geocoding.";
 }
 
@@ -2025,6 +2127,16 @@ function headline(solo){
     closeFly();
   });
   document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeFly(); });
+
+  $("fcpick").innerHTML=FC_MODELS.map(m=>
+    `<option value="${m.id}"${m.id===fcSource?" selected":""}>${esc(m.label)}</option>`).join("");
+  $("fcpick").onchange=e=>{
+    fcSource=e.target.value;
+    try{ localStorage.setItem(FC_SRC_KEY,fcSource); }catch(err){}
+    // Each source keeps its own map, so re-applying is just a re-lay, no refetch.
+    cities.forEach(c=>applySource(c));
+    clearNote(); draw();
+  };
 
   $("thresh").innerHTML=HOT_CHOICES.map(v=>
     `<option value="${v}"${v===thresh?" selected":""}>${v}°F</option>`).join("");
