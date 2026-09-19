@@ -327,14 +327,19 @@ Changing these without understanding why breaks correctness, not just appearance
   rather than an interstate, so it draws in the thinner US-highway style.
 - **`MS_PLACES` are markers with no forecast behind them.** Bruce, Amory, Houston,
   Eupora, Starkville, Belzoni, Louisville, Macon, Rolling Fork, Yazoo City,
-  Vicksburg, Raleigh, Bude and Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
+  West Point, Vicksburg, Raleigh, De Kalb, Bude and Lucedale are there for
+  orientation only: a smaller, dimmer dot and a smaller name,
   deliberately unlike a station so a reader cannot mistake one for a station whose
   number failed to load. They are not in `MS_CITIES`, so they cost no requests and
   never reach the table, the ranking or the breakdown, and nothing about them is
   tappable. The harness asserts a place never renders a second text node — that is
   what a stray temperature would look like.
   The same trap caught the shield font: `.msshield text` sets `font-size`, so the
-  per-badge size has to go on an inline `style`, not a `font-size=` attribute.
+  per-badge size has to go on an inline `style`, not a `font-size=` attribute — and
+  then `.msname` and `.msplace text` for the same reason, once the station and place
+  fonts had to differ between phone and desktop. A size that varies by breakpoint
+  cannot live in a CSS rule that also wins the cascade; the rules now carry colour
+  only and `nfs`/`pfs` go out inline.
 - **Station labels are placed before place labels.** Both go through the same
   collision placer, which takes a radius, a text size, a line height and a gap, but
   the stations carry the numbers so they get the clear ground and a place name gives
@@ -373,6 +378,14 @@ Changing these without understanding why breaks correctness, not just appearance
   desktop, so Columbus's marker is proportionally closer and "above" misses by about
   half a pixel. A name below the dot beats a name touching a marker, so that is left
   rather than tuned to the pixel.
+- **A place dot is an obstacle before any label is placed, which is why `wide`
+  exists.** Rolling Fork sits about 33px from Yazoo City on a phone, and because
+  every place's dot goes into `boxes` up front, it crowded Yazoo City's name out even
+  when its own label was placed last — demoting it made no difference, because the
+  dot blocks regardless of label order. `wide:1` drops a place from the phone map
+  entirely, which is the only thing that frees the space. Proven by removing Rolling
+  Fork outright and watching Belzoni and Yazoo City both fit. Reach for it only when
+  a place is provably the one crowding another out, not as a way to thin a busy map.
 - **A place that cannot be placed clear is dropped, not drawn on top.** `place()`
   returns false when no candidate clears, and `drawMs()` renders only the places that
   fit. A station always draws — it carries a number, so it falls back to below and
@@ -392,7 +405,11 @@ Changing these without understanding why breaks correctness, not just appearance
 - **A shield may carry `dx`/`dy` and `sm`.** The nudge shifts the *candidate* before
   the collision test, not the badge afterwards, so a hand-placed label still cannot
   overlap anything — US 61 uses `dy:-11`. `sm` is for a route named rather than
-  numbered: "Natchez Trace" at full badge size is a banner, so it drops to 6px.
+  numbered: "Natchez Trace" at full badge size is a banner, so it drops to 6px. The
+  Trace also carries `dy:-18`, and needs it: it is the longest route and it runs
+  diagonally through the busiest part of the map, so once sixteen place names were
+  down nothing on its own line was clear and its badge was dropped entirely. More
+  anchor points did not recover it — lifting the badge off the route did.
 - **Road geometry is checked against the outline, not against the eye.** Every road
   vertex *and* 50 sampled points along every segment are tested point-in-polygon
   against `MS_OUTLINE` — 3,610 points in total, all of which must fall inside. The
@@ -404,6 +421,15 @@ Changing these without understanding why breaks correctness, not just appearance
   three routes outside. Watch the sign when nudging an endpoint: longitudes here are
   negative, so *east* is the larger number, and "move it inside" on the Alabama line
   means more negative, not less.
+- **`MS_FILL` tints the counties that hold a city, and it is generated, not curated.**
+  The 26 counties containing a station or a place dot are emitted as closed rings by
+  the same build step that produces `MS_OUTLINE` and `MS_COUNTIES`, from the same
+  Census source, by testing each city point against each county polygon. Simplified
+  a shade tighter (0.008° against 0.012°) because the county lines draw *over* the
+  fills: a fill sitting a hair inside its own outline is hidden, one that spills past
+  it is not. **Regenerate it whenever `MS_CITIES` or `MS_PLACES` changes**, or a new
+  city sits in an untinted county — the scratch harness checks both directions, that
+  every city is inside a tinted ring and that no tinted ring is empty.
 - **County lines are the faintest thing on the page, and one element.** All 202 of
   them are a single `<path>` rather than 202 polylines: the same picture, a fraction
   of the DOM, and nothing about them needs to be addressable. They are stroked at
@@ -411,8 +437,8 @@ Changing these without understanding why breaks correctness, not just appearance
   county borders bury the eleven markers that the page is actually about.
 - **Shields yield to everything and are dropped rather than squeezed.** Roads are
   context, not data, so the badges are placed only after the markers and the city
-  names, against the same collision test, trying every interior vertex and every
-  midpoint along the route. A route whose badge finds no clear spot keeps its line
+  names, against the same collision test, trying every interior vertex and the
+  quarter, half and three-quarter points of every segment. A route whose badge finds no clear spot keeps its line
   and loses its label — which is what happens to US 82 on a phone. The lines
   themselves are drawn under the markers and are deliberately dim; if they ever start
   competing with the temperature ramp for attention, they are wrong.
@@ -420,6 +446,19 @@ Changing these without understanding why breaks correctness, not just appearance
   of longitude is 0.84 of a degree of latitude, so plotting lon and lat on the same
   scale comes out a third too wide and the state reads as the wrong shape. The scale
   is `min(w/dx, h/dy)` so the aspect ratio survives whatever box it is given.
+- **The phone map is bigger than the desktop one, and the marker radius is the
+  thing that caps it.** A 390px phone was drawing a 330×400 map with 10.5px names
+  — legible at arm's length only just, and leaving a third of the screen to the
+  table below. It is now 352×500 with 11.5px station names and 8px place names,
+  against 400×480 and 10.5/7 on desktop, with the body gutter cut to 11px to pay
+  for the width. The markers grew with it, but only to `rr=13`: 13.5 put Kosciusko's
+  marker through Greenwood's name, which is the clash the harness catches, so 13 is
+  the largest value that is provably clear. The extra room is worth more than it
+  cost — the phone map now places **15** of the 16 places (Starkville came back) and
+  **all 11** shields, where the smaller one dropped Starkville and US 82. Rolling
+  Fork is still absent, which is `wide:1` by design, not a casualty of the scale.
+  Two strings were shortened to buy the same space: the readout under the map and
+  the Census credit in the key.
 - **Map labels are placed against collisions, not at a fixed offset.** Greenville,
   Cleveland, Greenwood and Grenada sit within about fifty pixels of each other, and a
   fixed side put names straight through neighbouring markers. Each name takes the
