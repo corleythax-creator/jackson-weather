@@ -35,6 +35,17 @@ production by itself** — no manual deployment step. Confirmed on 19 Sep 2026: 
 of `3ed7213` produced `dpl_HUPZzuQceESDWiPkeyLTjzmzLgZp`, target production,
 `source: "git"`, with the `jackson-weather-corley.vercel.app` alias attached. A push to
 any other branch gets a preview deployment, and Vercel's bot comments the URL on the PR.
+Confirmed again on 19 Sep 2026: `9d093c9` produced `dpl_GbwVUSsabTktt2ctUhG5hpadXb2z`,
+target production, `source: "git"`, `aliasError: null`, with the
+`jackson-weather-corley.vercel.app` alias attached.
+
+**Do not confirm a deploy by fetching the site from an agent session.** The sandbox
+proxies outbound HTTPS and serves a *cached* copy, so the page comes back without the
+change and it looks like the deploy failed. The tell is in the headers: a
+deployment-specific URL minutes old answering `x-vercel-cache: HIT` with an `age` of
+twelve hours, and a byte count that does not match the local file. Check the Vercel API
+instead — `readyState`, `aliasError` and the `alias` list on the deployment are the
+authoritative answer, the same way RLS has to be checked in SQL rather than over HTTP.
 
 ## Data sources
 
