@@ -301,18 +301,35 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson – Kosciusko – Tupelo and is both the direct and the obvious drive from
   Jackson, so it is the route that answers "how would I get there". It is a parkway
   rather than an interstate, so it draws in the thinner US-highway style.
-- **`MS_PLACES` are markers with no forecast behind them.** Amory, Yazoo City and
-  Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
+- **`MS_PLACES` are markers with no forecast behind them.** Amory, Yazoo City,
+  Flowood, Bude and Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
   deliberately unlike a station so a reader cannot mistake one for a station whose
   number failed to load. They are not in `MS_CITIES`, so they cost no requests and
   never reach the table, the ranking or the breakdown, and nothing about them is
   tappable. The harness asserts a place never renders a second text node — that is
   what a stray temperature would look like.
+  The same trap caught the shield font: `.msshield text` sets `font-size`, so the
+  per-badge size has to go on an inline `style`, not a `font-size=` attribute.
 - **Station labels are placed before place labels.** Both go through the same
-  four-candidate collision placer, which now takes a radius and a text size, but the
-  stations carry the numbers so they get the clear ground and a place name gives way.
-  All twelve markers and all three place dots are obstacles before any label is
+  collision placer, which takes a radius, a text size, a line height and a gap, but
+  the stations carry the numbers so they get the clear ground and a place name gives
+  way. All twelve markers and all five place dots are obstacles before any label is
   placed, so order within each group cannot change the result.
+- **A place label can slide sideways while staying raised.** Places get two extra
+  candidates — above-and-right, above-and-left — before they fall back to below. This
+  is not decoration: Amory's plain "above" box overlaps Tupelo's marker by about 4px,
+  so without them its name drops under the dot. Shrinking the place font to 7.5px was
+  not enough on its own; the sideways slide is what actually clears it.
+- **Flowood is inside Jackson's marker and its dot cannot be seen.** They are about
+  seven miles apart, which at this map scale is 8.9px against an 11.5px marker
+  radius, and places draw *under* the stations. The label still lands beside
+  Jackson's chip, where Flowood actually is, so the name reads correctly even though
+  the dot does not show. Drawing places over the markers instead would put a grey dot
+  on a temperature chip, which looks like a defect rather than a second town.
+- **A shield may carry `dx`/`dy` and `sm`.** The nudge shifts the *candidate* before
+  the collision test, not the badge afterwards, so a hand-placed label still cannot
+  overlap anything — US 61 uses `dy:-11`. `sm` is for a route named rather than
+  numbered: "Natchez Trace" at full badge size is a banner, so it drops to 6px.
 - **Road geometry is checked against the outline, not against the eye.** Every road
   vertex *and* 50 sampled points along every segment are tested point-in-polygon
   against `MS_OUTLINE` — 3,610 points in total, all of which must fall inside. The
