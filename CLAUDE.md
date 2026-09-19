@@ -38,7 +38,7 @@ All keyless. All free tier.
 | Observations | `archive-api.open-meteo.com/v1/archive` | ERA5 reanalysis, ~5-day lag |
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving |
-| Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one extra call returns ECMWF, GFS, ICON, GEM and the blend, each suffixed with its id |
+| Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns ECMWF, GFS, ICON, GEM and the blend, each suffixed with its id; **lazy** — only when a model is driving the chart or the comparison is asked for |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
 | Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation, then cached in `localStorage` (~380 KB) so it is pulled once per browser rather than once per load |
@@ -123,6 +123,20 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson reached. An earlier change let NWS take today on the theory that a
   non-observation should defer to NWS; it was reverted, because "not measured" does
   not mean "worse".
+- **Every Open-Meteo response goes through `grabCached()`.** Reloading used to refetch
+  everything, which exhausted the free tier and left the app unable to load *at all* —
+  the archive call 429s, `byDate` comes back empty, the city is dropped and no chart
+  ever appears. Now: this year's archive and forecast are kept 30 minutes, normals,
+  past years and the soil baseline a month, under `jw:` keys. A warm reload makes
+  **zero** Open-Meteo requests. A 200 carrying `{error:true,reason}` has no
+  `daily`/`hourly` block and is never cached.
+- **Stale beats nothing.** When a request fails and any copy exists in storage — at any
+  age — it is served and `usedStale` puts a line in the footer saying the numbers may
+  be hours behind. A rate limit should degrade the dashboard, not blank it.
+- **Request budget is a design constraint, not an afterthought.** A cold load is three
+  Open-Meteo calls. Before adding a fourth, check what it does to a user who reloads:
+  the model comparison was added as an unconditional load-time call and had to be made
+  lazy within the hour. The default source is NWS, so a normal load costs nothing for it.
 - **Every forecast source keeps its own map, so switching is lossless.** `applySource()`
   lays the chosen source over the forecast days from `city.nwsMap` or `city.alt[id]`;
   nothing is overwritten irrecoverably, so flipping the picker needs no refetch. NWS
