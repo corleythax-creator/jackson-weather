@@ -88,6 +88,8 @@
   .brush{fill:rgba(230,237,236,.13);stroke:var(--ink);stroke-width:1}
 
   .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 0}
+  /* Year and forecast source drive what the chart shows, so they sit above it. */
+  .controls.topctl{margin:0 0 14px}
   .controls .sep{flex:1}
   .grp{display:inline-flex;gap:0;border:1px solid var(--rule);border-radius:2px;overflow:hidden}
   /* an author display: rule beats the browser's [hidden], so say it explicitly */
@@ -193,6 +195,7 @@
   .fcthin{fill:none;stroke:var(--ink-soft);stroke-width:1;opacity:.45;stroke-linejoin:round}
   .fcnws{fill:none;stroke:var(--today);stroke-width:1.8;stroke-linejoin:round}
   .fcpick2{fill:none;stroke:var(--hot);stroke-width:2.2;stroke-linejoin:round}
+  .fcpick3{fill:none;stroke:var(--cold);stroke-width:2.2;stroke-linejoin:round}
   .stats td .cell b{font-weight:600}
   .stats td .cell i{display:block;font-style:normal;font-size:11px;color:var(--ink-soft)}
   .stats td .who{display:block;font-size:11px;color:var(--ink-soft);font-weight:400}
@@ -250,6 +253,11 @@
       <button data-mode="fc" aria-pressed="true">Forecast</button>
       <button data-mode="chart" aria-pressed="false">Timeline</button>
       <button data-mode="hot" aria-pressed="false">Hot days</button>
+      <button data-mode="ver" aria-pressed="false">Verification</button>
+    </div>
+    <div class="controls topctl">
+      <select id="yearpick" aria-label="Year"></select>
+      <select id="fcpick" aria-label="Forecast source" hidden></select>
     </div>
     <div class="panelpick" id="panelpick" role="tablist" aria-label="Choose a panel"></div>
     <div class="readout" id="readout"><span class="stat">Hover or touch the chart to read a period.</span></div>
@@ -258,8 +266,6 @@
     <div class="key" id="key"></div>
     <div class="stats" id="fcsrc" hidden></div>
     <div class="controls">
-      <select id="yearpick" aria-label="Year"></select>
-      <select id="fcpick" aria-label="Forecast source" hidden></select>
       <span id="hotctl" hidden>
         <label for="thresh" style="color:var(--ink-soft);font-size:13.5px;margin-right:6px">Days at or above</label>
         <select id="thresh" aria-label="Temperature threshold"></select>
@@ -384,6 +390,14 @@ const FC_MODELS=[
 ];
 const ALT_MODELS=FC_MODELS.filter(m=>m.id!=="nws").map(m=>m.id).join(",");
 const FC_SRC_KEY="jw:fcsrc";
+// Verification. Open-Meteo's previous-runs archive keeps what each model *said* at a
+// fixed lead time, so temperature_2m_max_previous_day3 is the high that model
+// published three days before the day it applies to. Scoring a model's current
+// numbers for a past day would measure its analysis instead — a different and far
+// easier test — which is the whole reason this uses a separate endpoint.
+const verBase="https://previous-runs-api.open-meteo.com/v1/forecast";
+const VER_DAYS=60;     // how far back to score; the window slides with today
+const VER_LEADS=7;     // previous_day1 … previous_day7 is what the archive publishes
 let fcSource=(()=>{
   try{ const v=localStorage.getItem(FC_SRC_KEY);
        return FC_MODELS.some(m=>m.id===v)?v:"nws"; }catch(e){ return "nws"; }
@@ -525,7 +539,11 @@ async function addCity(lat,lon,label){
               soilBase:null,soil:null,api:null,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
-  if(cities.includes(city)){ if(mode!=="fc") maybeLoadClim(); maybeLoadSoil(); }
+  if(cities.includes(city)){
+    if(mode==="chart"||mode==="hot") maybeLoadClim();
+    if(mode==="ver") maybeLoadVer(city);
+    maybeLoadSoil();
+  }
 }
 
 async function loadCity(city){
@@ -551,6 +569,7 @@ async function loadCity(city){
   city.byDate.forEach((r,t)=>{ if(r.src==="archive"&&(!city.obsEnd||t>city.obsEnd)) city.obsEnd=t; });
   if(res[1]&&res[1].status==="fulfilled") absorb(city,res[1].value,"model");
   city.alt={}; city.altTried=false;
+  city.ver=null; city.verTried=false; city.verErr=null;
 
   city.loading=false;
   if(!city.byDate.size){
@@ -638,6 +657,59 @@ function absorbAlt(city,json){
     d.time.forEach((t,i)=>{ if(hi[i]!=null&&lo[i]!=null) map.set(t,{hi:hi[i],lo:lo[i]}); });
     if(map.size) city.alt[m.id]=map;
   });
+}
+
+// One request, made only when the Verification tab is opened. The truth it is scored
+// against is already on hand — the archive days in city.byDate — so nothing else is
+// fetched. See CLAUDE.md on the request budget.
+async function maybeLoadVer(city){
+  if(!city||city.verTried) return;
+  city.verTried=true; city.verErr=null;
+  const leads=[];
+  for(let d=1;d<=VER_LEADS;d++) leads.push(`temperature_2m_max_previous_day${d}`);
+  try{
+    const j=await grabCached(`${verBase}?latitude=${city.lat}&longitude=${city.lon}`
+      +`&daily=${leads.join(",")}${units}&past_days=${VER_DAYS}&forecast_days=1`
+      +`&models=${ALT_MODELS}`, "ver", TTL_VER);
+    // Open-Meteo can fail inside an HTTP 200, so check the shape, not just the status.
+    if(!j||!j.daily||!j.daily.time) throw new Error((j&&j.reason)||"no daily block");
+    city.ver=j.daily;
+  }catch(e){ city.verErr=e.message||String(e); }
+  if(cities.length===1&&cities[0]===city&&mode==="ver") draw();
+}
+
+// Mean absolute error and bias against the archive's own reading for that day, per
+// model per lead time. A model is scored only where there is something measured to
+// score it against, so forecast days and the ERA5 lag window are both out.
+function verScore(city){
+  const d=city.ver; if(!d||!d.time) return null;
+  const truth=new Map();
+  d.time.forEach(t=>{ const r=city.byDate.get(t);
+    if(r&&r.src==="archive"&&!r.fc&&r.hi!=null) truth.set(t,r.hi); });
+  if(!truth.size) return null;
+  const rows=[];
+  FC_MODELS.forEach(m=>{
+    if(m.id==="nws") return;          // nobody archives what NWS said last Tuesday
+    const leads=[]; let sa=0,sb=0,sn=0;
+    for(let L=1;L<=VER_LEADS;L++){
+      const arr=d[`temperature_2m_max_previous_day${L}_${m.id}`];
+      let a=0,b=0,k=0;
+      if(arr) d.time.forEach((t,i)=>{
+        const o=truth.get(t), f=arr[i];
+        if(o==null||f==null) return;
+        a+=Math.abs(f-o); b+=f-o; k++;
+      });
+      leads.push(k?{mae:a/k,bias:b/k,n:k}:null);
+      sa+=a; sb+=b; sn+=k;
+    }
+    // A model with no archived runs here is absent rather than a row of dashes,
+    // the same rule fcRows() follows.
+    if(sn) rows.push(Object.assign({},m,{leads,all:{mae:sa/sn,bias:sb/sn,n:sn}}));
+  });
+  if(!rows.length) return null;
+  rows.sort((x,y)=>x.all.mae-y.all.mae);
+  const days=[...truth.keys()].sort();
+  return {rows,days:days.length,from:days[0],to:days[days.length-1]};
 }
 
 // Lays the chosen source over the forecast days. Every source keeps its own map, so
@@ -750,6 +822,9 @@ async function maybeLoadClim(){
 // is kept; a rate-limited reload then still has yesterday's answer to draw.
 const TTL_LIVE=30*6e4;        // this year's numbers: half an hour
 const TTL_STATIC=30*864e5;    // normals, past years, soil baseline: a month
+// Verification asks for "the last VER_DAYS days", so the same URL means something
+// different tomorrow. Half a day keeps repeat visits free without freezing the window.
+const TTL_VER=12*36e5;
 function lsGet(key,maxAge){
   try{
     const raw=localStorage.getItem(key); if(!raw) return null;
@@ -1127,13 +1202,14 @@ function note(html){ $("state").innerHTML=html; $("state").hidden=false; }
 function clearNote(){ $("state").hidden=true; }
 
 function syncButtons(){
-  const chart=mode==="chart", fc=mode==="fc";
+  const chart=mode==="chart", fc=mode==="fc", ver=mode==="ver";
   $("granpick").hidden=!chart;
   $("hotctl").hidden=mode!=="hot";
   $("panelpick").style.display=chart?"":"none";
   document.querySelectorAll("[data-days]").forEach(b=>b.hidden=!chart);
   $("out").hidden=!chart;
-  $("fcpick").hidden=!((chart||fc)&&IS_CURRENT&&cities.length===1);
+  // Verification highlights your pick too, so the menu stays reachable there.
+  $("fcpick").hidden=!((chart||fc||ver)&&IS_CURRENT&&cities.length===1);
   $("tabs").querySelectorAll("[data-mode]").forEach(b=>
     b.setAttribute("aria-pressed",String(b.dataset.mode===mode)));
 
@@ -1316,8 +1392,8 @@ function drawFc(){
   const X=i=>L+(dates.length<2?iw/2:i*iw/(dates.length-1));
 
   let lo=Infinity,hi=-Infinity;
-  rows.forEach(r=>dates.forEach(t=>{const v=r.map.get(t);
-    if(v&&v.hi!=null){lo=Math.min(lo,v.hi);hi=Math.max(hi,v.hi);}}));
+  rows.forEach(r=>dates.forEach(t=>{const v=r.map.get(t); if(!v) return;
+    [v.hi,v.lo].forEach(x=>{ if(x!=null){lo=Math.min(lo,x);hi=Math.max(hi,x);} });}));
   if(!isFinite(lo)){ say("No forecast days available."); return; }
   const y0=Math.floor((lo-3)/5)*5, y1=Math.ceil((hi+3)/5)*5;
   const Y=v=>T+BH-(v-y0)/(y1-y0||1)*BH;
@@ -1328,30 +1404,45 @@ function drawFc(){
     s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
       +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}°</text>`;
 
-  // Spread band: how far apart the sources are on each day.
-  const band=dates.map((t,i)=>{
-    const vs=rows.map(r=>r.map.get(t)).filter(v=>v&&v.hi!=null).map(v=>v.hi);
-    return vs.length?{i,min:Math.min(...vs),max:Math.max(...vs),n:vs.length,
+  // Spread band, per day and per series: how far apart the sources are. High and low
+  // are pooled separately — a source can cover one and not the other, so the counts
+  // and the means are kept apart rather than assuming every row has both.
+  const agg=(t,k)=>{
+    const vs=rows.map(r=>r.map.get(t)).filter(v=>v&&v[k]!=null).map(v=>v[k]);
+    return vs.length?{min:Math.min(...vs),max:Math.max(...vs),n:vs.length,
                       avg:vs.reduce((a,b)=>a+b,0)/vs.length}:null;
+  };
+  const band=dates.map((t,i)=>{
+    const h=agg(t,"hi"); if(!h) return null;
+    const l=agg(t,"lo");
+    return {i,min:h.min,max:h.max,n:h.n,avg:h.avg,
+            lmin:l&&l.min,lmax:l&&l.max,lavg:l?l.avg:null,ln:l?l.n:0};
   }).filter(Boolean);
-  if(band.length>1){
-    const top=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.max).toFixed(1)}`);
-    const bot=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.min).toFixed(1)}`);
-    s+=`<polygon class="normalband" points="${top.join(" ")} ${bot.slice().reverse().join(" ")}"/>`;
-  }
-  const line=(r,cls,extra)=>{
+  const fill=(hiKey,loKey)=>{
+    const pts=band.filter(b=>b[hiKey]!=null&&b[loKey]!=null);
+    if(pts.length<2) return "";
+    const top=pts.map(b=>`${X(b.i).toFixed(1)},${Y(b[hiKey]).toFixed(1)}`);
+    const bot=pts.map(b=>`${X(b.i).toFixed(1)},${Y(b[loKey]).toFixed(1)}`);
+    return `<polygon class="normalband" points="${top.join(" ")} ${bot.slice().reverse().join(" ")}"/>`;
+  };
+  s+=fill("max","min")+fill("lmax","lmin");
+  const line=(r,cls,key)=>{
     const pts=dates.map((t,i)=>{const v=r.map.get(t);
-      return (v&&v.hi!=null)?`${X(i).toFixed(1)},${Y(v.hi).toFixed(1)}`:null;}).filter(Boolean);
-    return pts.length>1?`<polyline class="${cls}" ${extra||""} points="${pts.join(" ")}"/>`:"";
+      return (v&&v[key]!=null)?`${X(i).toFixed(1)},${Y(v[key]).toFixed(1)}`:null;}).filter(Boolean);
+    return pts.length>1?`<polyline class="${cls}" points="${pts.join(" ")}"/>`:"";
   };
   // The average is the headline line: one number a day, rather than asking the eye
   // to pick one model out of a dozen. The chosen source stays on as a reference so
   // the picker still means something here.
-  rows.forEach(r=>{ if(r.id!==fcSource) s+=line(r,"fcthin"); });
+  rows.forEach(r=>{ if(r.id!==fcSource) s+=line(r,"fcthin","hi")+line(r,"fcthin","lo"); });
   const pick=rows.find(r=>r.id===fcSource);
-  if(pick) s+=line(pick,"fcnws");
-  const apts=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.avg).toFixed(1)}`);
-  if(apts.length>1) s+=`<polyline class="fcpick2" points="${apts.join(" ")}"/>`;
+  if(pick) s+=line(pick,"fcnws","hi")+line(pick,"fcnws","lo");
+  const mean=(key,cls)=>{
+    const pts=band.filter(b=>b[key]!=null)
+      .map(b=>`${X(b.i).toFixed(1)},${Y(b[key]).toFixed(1)}`);
+    return pts.length>1?`<polyline class="${cls}" points="${pts.join(" ")}"/>`:"";
+  };
+  s+=mean("avg","fcpick2")+mean("lavg","fcpick3");
 
   // Today, then a label under every day the axis has room for.
   const maxLab=M?5:14, lstep=Math.max(1,Math.ceil(dates.length/maxLab));
@@ -1362,33 +1453,227 @@ function drawFc(){
   });
   {
     const rr=M?10:11.5, sp=dates.length<2?iw:iw/(dates.length-1);
+    const node=(x,v,col)=>{
+      const n=String(Math.round(v)), f=Math.min(M?10:10.5,(2*rr-3)/(n.length*0.6));
+      return `<circle cx="${x.toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${rr}" fill="var(--paper)" `
+        +`stroke="${col}" stroke-width="1.4"/>`
+        +`<text class="dnode" x="${x.toFixed(1)}" y="${(Y(v)+f*0.35).toFixed(1)}" `
+        +`text-anchor="middle" fill="${col}" font-size="${f.toFixed(1)}">${n}</text>`;
+    };
     if(sp>=2*rr) band.forEach(b=>{
-      const n=String(Math.round(b.avg)), f=Math.min(M?10:10.5,(2*rr-3)/(n.length*0.6));
-      s+=`<circle cx="${X(b.i).toFixed(1)}" cy="${Y(b.avg).toFixed(1)}" r="${rr}" fill="var(--paper)" `
-        +`stroke="var(--hot)" stroke-width="1.4"/>`
-        +`<text class="dnode" x="${X(b.i).toFixed(1)}" y="${(Y(b.avg)+f*0.35).toFixed(1)}" `
-        +`text-anchor="middle" fill="var(--hot)" font-size="${f.toFixed(1)}">${n}</text>`;
+      s+=node(X(b.i),b.avg,"var(--hot)");
+      // The low's ring is dropped rather than drawn overlapping on a day with
+      // barely any diurnal range — same rule the high/low labels follow elsewhere.
+      if(b.lavg!=null&&Y(b.lavg)-Y(b.avg)>=2*rr) s+=node(X(b.i),b.lavg,"var(--cold)");
     });
   }
-  s+=`<text class="panellabel" x="${L}" y="${T-12}">Daily high °F — average of all sources</text>`;
+  s+=`<text class="panellabel" x="${L}" y="${T-12}">Daily high and overnight low °F — average of all sources</text>`;
   svg.innerHTML=s; svg._geom=null;
 
   const worst=band.reduce((a,b)=>Math.max(a,b.max-b.min),0);
   const pickName=(FC_MODELS.find(m=>m.id===fcSource)||{}).label||fcSource;
-  $("key").innerHTML=`<span><i style="background:var(--hot)"></i>Average of all sources</span>`
+  $("key").innerHTML=`<span><i style="background:var(--hot)"></i>Average high</span>`
+    +`<span><i style="background:var(--cold)"></i>Average low</span>`
     +(pick?`<span><i style="background:var(--today)"></i>${esc(pickName)}, your pick</span>`:``)
     +`<span><i style="background:var(--ink-soft)"></i>Every other source</span>`
     +`<span><i class="swatch"></i>Full spread</span>`;
-  $("stand").innerHTML=`<b>${esc(solo.label)}</b> — the line is the <b>average</b> of `
-    +`<b>${rows.length}</b> forecast sources over <b>${dates.length}</b> days. They disagree by `
+  $("stand").innerHTML=`<b>${esc(solo.label)}</b> — the bold lines are the <b>average</b> `
+    +`high and low across <b>${rows.length}</b> forecast sources over <b>${dates.length}</b> `
+    +`days. They disagree on the high by `
     +`as much as <b>${worst.toFixed(0)}°F</b> on a single day`
     +(pick?`; <b>${esc(pickName)}</b> is drawn alongside it in green, and is what the `
       +`Timeline tab uses.`:`.`);
   $("hint2").textContent="Read down a column for how far apart the sources are on one day, "
     +"across a row to find the one matching a forecast you trust.";
   $("stats").hidden=true;
-  $("readout").innerHTML=`<span class="stat">Daily high, every source that covers this point.</span>`;
+  $("readout").innerHTML=`<span class="stat">Daily high and overnight low, `
+    +`every source that covers this point.</span>`;
   renderFcTable(solo,rows,dates);
+}
+
+function drawVer(){
+  const svg=$("chart"); $("fig").hidden=false;
+  const M=isMobile();
+  const solo=cities.length===1?cities[0]:null;
+  const nice=t=>`${MONTHS[+t.slice(5,7)-1]} ${+t.slice(8)}`;
+  const say=t=>{ svg.setAttribute("viewBox",`0 0 ${M?380:1000} 120`);
+    svg.innerHTML=`<text x="${M?12:20}" y="60" fill="var(--ink-soft)">${t}</text>`;
+    svg._geom=null; $("key").innerHTML=""; $("fcsrc").hidden=true;
+    $("stats").hidden=true; $("hint2").textContent="";
+    $("readout").innerHTML=`<span class="stat">How far off each model ran, by lead time.</span>`; };
+  if(!solo){ say("Drop to one city to score the models.");
+    $("stand").innerHTML=`Verification scores one city at a time.`; return; }
+  if(!IS_CURRENT){ say(`Verification reads the last ${VER_DAYS} days.`);
+    $("stand").innerHTML=`The scores cover the ${VER_DAYS} days up to today — `
+      +`pick <b>${CUR_YEAR}</b> to see them.`; return; }
+
+  const sc=verScore(solo);
+  if(!sc){
+    say(solo.verErr?"The forecast archive didn't load."
+        :(solo.ver?"Nothing to score yet.":"Reading what the models said…"));
+    $("stand").innerHTML=solo.verErr
+      ? `Open-Meteo's previous-runs archive didn't answer — <code>${esc(solo.verErr)}</code>. `
+        +`Nothing is scored rather than scored against a guess.`
+      : (solo.ver
+         ? `No day in the window has both an archived forecast and an observation to `
+           +`check it against. ERA5 runs about five days behind, so the most recent days `
+           +`can't be marked yet.`
+         : `Fetching what every model published one to ${VER_LEADS} days before each `
+           +`day arrived, for <b>${esc(solo.label)}</b>…`);
+    return; }
+
+  const W=M?380:1000, L=M?38:56, R=M?12:18, T=M?30:34, BH=M?230:300;
+  const iw=W-L-R, XLAB=T+BH+22, H=XLAB+(M?18:22);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const X=i=>L+(VER_LEADS<2?iw/2:i*iw/(VER_LEADS-1));
+
+  // A mean over a shrinking set falls when a short-coverage model drops out, which
+  // on this chart reads as the forecasts getting better with less warning. So the
+  // band and the average cover only the models that publish every lead time; the
+  // table still lists all of them. Same reasoning as the Forecast tab's Sources row.
+  const full=sc.rows.filter(r=>r.leads.every(Boolean));
+  const plot=full.length>=2?full:sc.rows;
+  let top=0;
+  plot.forEach(r=>r.leads.forEach(v=>{ if(v) top=Math.max(top,v.mae); }));
+  // Error is a distance, so the axis starts at zero — a floating baseline would make
+  // a one-degree gap between models look like a chasm.
+  const y1=Math.max(2,Math.ceil(top+0.5)), Y=v=>T+BH-v/(y1||1)*BH;
+
+  let s="";
+  const step=y1>8?2:1;
+  for(let v=0;v<=y1;v+=step)
+    s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
+      +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}°</text>`;
+
+  const band=[];
+  for(let k=0;k<VER_LEADS;k++){
+    const vs=plot.map(r=>r.leads[k]).filter(Boolean).map(v=>v.mae);
+    band.push(vs.length?{k,min:Math.min(...vs),max:Math.max(...vs),
+                         avg:vs.reduce((a,b)=>a+b,0)/vs.length}:null);
+  }
+  const bb=band.filter(Boolean);
+  if(bb.length>1){
+    const hi=bb.map(b=>`${X(b.k).toFixed(1)},${Y(b.max).toFixed(1)}`);
+    const lo=bb.map(b=>`${X(b.k).toFixed(1)},${Y(b.min).toFixed(1)}`);
+    s+=`<polygon class="normalband" points="${hi.join(" ")} ${lo.slice().reverse().join(" ")}"/>`;
+  }
+  const line=(vals,cls)=>{
+    const pts=vals.map((v,k)=>v==null?null:`${X(k).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean);
+    return pts.length>1?`<polyline class="${cls}" points="${pts.join(" ")}"/>`:"";
+  };
+  const best=plot[0];
+  const pick=plot.find(r=>r.id===fcSource);
+  plot.forEach(r=>{ if(r!==best&&r!==pick)
+    s+=line(r.leads.map(v=>v&&v.mae),"fcthin"); });
+  // Your pick is only worth its own line when it is not already the best one.
+  if(pick&&pick!==best) s+=line(pick.leads.map(v=>v&&v.mae),"fcnws");
+  s+=line(best.leads.map(v=>v&&v.mae),"fcpick3");
+  s+=line(band.map(b=>b&&b.avg),"fcpick2");
+
+  for(let k=0;k<VER_LEADS;k++)
+    s+=`<line class="monthrule" x1="${X(k).toFixed(1)}" y1="${T}" x2="${X(k).toFixed(1)}" y2="${T+BH}"/>`
+      +`<text x="${X(k).toFixed(1)}" y="${XLAB}" text-anchor="middle">${k+1}</text>`;
+  {
+    const rr=M?10:11.5, sp=VER_LEADS<2?iw:iw/(VER_LEADS-1);
+    if(sp>=2*rr) bb.forEach(b=>{
+      const n=b.avg.toFixed(1), f=Math.min(M?9.5:10.5,(2*rr-3)/(n.length*0.6));
+      s+=`<circle cx="${X(b.k).toFixed(1)}" cy="${Y(b.avg).toFixed(1)}" r="${rr}" fill="var(--paper)" `
+        +`stroke="var(--hot)" stroke-width="1.4"/>`
+        +`<text class="dnode" x="${X(b.k).toFixed(1)}" y="${(Y(b.avg)+f*0.35).toFixed(1)}" `
+        +`text-anchor="middle" fill="var(--hot)" font-size="${f.toFixed(1)}">${n}</text>`;
+    });
+  }
+  s+=`<text class="panellabel" x="${L}" y="${T-12}">`
+    +`Average miss on the daily high, °F — by days of warning</text>`;
+  svg.innerHTML=s; svg._geom=null;
+
+  const pickName=(FC_MODELS.find(m=>m.id===fcSource)||{}).label||fcSource;
+  const d1=best.leads[0], worst=plot[plot.length-1];
+  const partial=sc.rows.length-plot.length;
+  $("key").innerHTML=`<span><i style="background:var(--cold)"></i>${esc(best.label)}, closest</span>`
+    +`<span><i style="background:var(--hot)"></i>Average of the ${plot.length} plotted</span>`
+    +(pick&&pick!==best?`<span><i style="background:var(--today)"></i>${esc(pickName)}, your pick</span>`:``)
+    +`<span><i style="background:var(--ink-soft)"></i>Every other model</span>`
+    +`<span><i class="swatch"></i>Closest to furthest</span>`;
+  $("stand").innerHTML=`<b>${esc(solo.label)}</b> — every model's published high against `
+    +`what the archive later recorded, over <b>${sc.days}</b> measured days `
+    +`(${nice(sc.from)}&ndash;${nice(sc.to)}). <b>${esc(best.label)}</b> is closest, off by `
+    +`<b>${best.all.mae.toFixed(1)}°F</b> on average`
+    +(d1?` and <b>${d1.mae.toFixed(1)}°F</b> a day ahead`:``)
+    +`; <b>${esc(worst.label)}</b> is furthest, at <b>${worst.all.mae.toFixed(1)}°F</b>.`
+    +(partial>0?` The chart compares the <b>${plot.length}</b> models that publish all `
+      +`${VER_LEADS} lead times; the table below adds <b>${partial}</b> that `
+      +`publish${partial>1?"":"es"} fewer.`:``);
+  $("hint2").textContent="Read across a row to see a model's forecast decay with lead time, "
+    +"down a column to see who was closest at that range.";
+  $("stats").hidden=true;
+  $("readout").innerHTML=`<span class="stat">Average miss in °F, and whether the model `
+    +`ran hot or cold.</span>`;
+  renderVerTable(sc,solo);
+}
+
+function renderVerTable(sc,solo){
+  const box=$("fcsrc"), M=isMobile();
+  const deg=M?"":"°";
+  // Shaded per column, like the forecast table: a cell's place is its rank among the
+  // models at that lead, not against the whole table. Error is a distance, so here
+  // the cool end of the ramp is the accurate end.
+  const col=[];
+  for(let k=0;k<VER_LEADS;k++){
+    const vs=sc.rows.map(r=>r.leads[k]).filter(Boolean).map(v=>v.mae);
+    col.push(vs.length?{min:Math.min(...vs),max:Math.max(...vs)}:null);
+  }
+  const av=sc.rows.map(r=>r.all.mae);
+  const allc={min:Math.min(...av),max:Math.max(...av)};
+  const shade=(v,st)=>{
+    if(!st) return "";
+    const f=st.max>st.min?(v-st.min)/(st.max-st.min):0.5;
+    const [r,g,b]=ramp(f*100,TEMP_STOPS);
+    return `background:rgba(${r},${g},${b},.5)`;
+  };
+  const sign=v=>(v>=0.05?"+":v<=-0.05?"−":"±")+Math.abs(v).toFixed(1);
+  const cell=(v,st)=>v
+    ? `<td><span class="cell" style="${shade(v.mae,st)}"><b>${v.mae.toFixed(1)}${deg}</b>`
+      +`<i>${sign(v.bias)}</i></span></td>`
+    : `<td>&mdash;</td>`;
+  const short=sc.rows.filter(r=>r.leads.some(v=>!v)).length;
+  box.innerHTML=`<h2>How close each model got &mdash; °F</h2>`
+    +`<p class="lede">The big number is the model's <b>average miss</b> on the daily high `
+    +`at that many days of warning; beneath it, whether it ran <b>hot</b> (+) or `
+    +`<b>cold</b> (−) on average. Lower is better, and each column is shaded against `
+    +`the other models at that range — <b style="color:#3B8AC4">blue</b> the closest, `
+    +`<b style="color:#C2542B">red</b> the furthest.</p>`
+    +`<div class="scroller"><table><thead><tr><th>Model</th>`
+    +Array.from({length:VER_LEADS},(_,k)=>
+       `<th>${k+1}<span class="mon">day${k?"s":""}</span></th>`).join("")
+    +`<th>All<span class="mon">pooled</span></th></tr></thead><tbody>`
+    +sc.rows.map(r=>`<tr${r.id===fcSource?' class="active"':''}>`
+      +`<td>${esc(r.label)}<span class="who">${esc(r.who||"")}</span></td>`
+      +r.leads.map((v,k)=>cell(v,col[k])).join("")
+      +cell(r.all,allc)+`</tr>`).join("")
+    +`<tr class="spread"><td>Days scored<span class="who">with an observation</span></td>`
+    +Array.from({length:VER_LEADS},(_,k)=>{
+       const ns=sc.rows.map(r=>r.leads[k]).filter(Boolean).map(v=>v.n);
+       return `<td>${ns.length?Math.max(...ns):"—"}</td>`;}).join("")
+    +`<td>${sc.days}</td></tr>`
+    +`<tr class="spread"><td>Models<span class="who">publishing that lead</span></td>`
+    +Array.from({length:VER_LEADS},(_,k)=>
+       `<td>${sc.rows.filter(r=>r.leads[k]).length}</td>`).join("")
+    +`<td>${sc.rows.length}</td></tr>`
+    +`</tbody></table></div>`
+    +`<p class="foot">Scored against ERA5's own reading for each day — the same `
+    +`&ldquo;observed&rdquo; numbers the Timeline draws, which is a reanalysis on a `
+    +`~31 km cell rather than a thermometer in ${esc(solo.label)}. It is the best `
+    +`consistent record available here, but it means a model tuned to the same `
+    +`reanalysis has a small edge. <b>NWS is not in this table</b>: nobody publishes an `
+    +`archive of what its forecast said last week, so it cannot be scored the same way. `
+    +`The window is the last ${VER_DAYS} days, less the few most recent that the archive `
+    +`has not reached yet`
+    +(short?`; ${short} model${short>1?"s":""} publish${short>1?"":"es"} fewer than `
+      +`${VER_LEADS} lead times, so the pooled column covers fewer forecasts for `
+      +`${short>1?"them":"it"}`:``)
+    +`. One request, cached for half a day.</p>`;
+  box.hidden=false;
 }
 
 function drawHot(){
@@ -1804,6 +2089,7 @@ function draw(){
   if(!cities.length) return;
   if(mode==="hot") return drawHot();
   if(mode==="fc") return drawFc();
+  if(mode==="ver") return drawVer();
   const svg=$("chart"); $("fig").hidden=false;
   const M=isMobile();
   const solo=cities.length===1?cities[0]:null;
@@ -2431,9 +2717,11 @@ function headline(solo){
     mode=b.dataset.mode;
     // Loads fire before draw(), never after — see CLAUDE.md. The hot-days view wants
     // the normals response for its monthly average and the long archive for records.
-    if(mode!=="fc") maybeLoadClim();          // the Forecast tab needs no normals
+    // Neither the Forecast nor the Verification tab ever reads the normals.
+    if(mode==="chart"||mode==="hot") maybeLoadClim();
     if(mode==="hot") maybeLoadHist(cities.length===1?cities[0]:null);
     if(mode==="fc") maybeLoadAlt(cities.length===1?cities[0]:null);
+    if(mode==="ver") maybeLoadVer(cities.length===1?cities[0]:null);
     syncButtons(); draw();
   });
   $("yearpick").innerHTML=(()=>{
