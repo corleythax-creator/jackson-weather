@@ -65,8 +65,13 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   Grenada, Cleveland, Greenwood, Columbus, Greenville, Meridian, Jackson, Natchez,
   ordered north to south) against the next 7 days. Each cell is the mean of the 13
   Open-Meteo models *and NWS* for that city and day, high over low, shaded by where
-  the city falls among the others that day. Tapping a figure opens the
-  source-by-source breakdown behind it, anchored to the cell. No chart on this tab.
+  the city falls among the others that day. Above it, a **map**: a hand-traced
+  Mississippi outline with the cities at their real coordinates, each a marker
+  carrying that day's average high and coloured on the same ramp, plus a
+  warmest-to-coolest ranking beside it on desktop. A day picker drives the map and
+  marks the matching table column. Tapping either a marker or a figure opens the
+  source-by-source breakdown. The map costs no extra requests — it is the data the
+  table already holds, drawn a second way.
 - **Verification tab** — how far each model's *published* forecast landed from what
   the archive later recorded, by lead time. A chart of average miss against days of
   warning (band, thin lines, bold average and bold best), and a table of every model
@@ -239,6 +244,40 @@ Changing these without understanding why breaks correctness, not just appearance
   point `msSel` already names the cell just clicked — so "close when the click is on
   the selected cell" closed the card on the same click that opened it. The listener
   now ignores `button.msbtn` entirely and the button decides open-or-close itself.
+- **The map is hand-drawn SVG, like every other chart here.** A tile layer or a
+  GeoJSON fetch would mean a dependency, a key or a request, and the single-file rule
+  forbids all three. `MS_OUTLINE` is a 42-point boundary traced by hand at roughly
+  county resolution: the 35th parallel, the Alabama line, the coast and the Pearl
+  River, the 31st parallel, then the Mississippi River back up with its meanders
+  smoothed away. It is a frame, not a survey — the key says "outline simplified; city
+  positions exact", because the city coordinates *are* exact and the outline is the
+  one drawn thing on the page that is an approximation. Do not let it acquire an
+  authority it has not earned by dropping that caption.
+- **`msProject()` corrects longitude by cos(lat).** At Mississippi's latitude a degree
+  of longitude is 0.84 of a degree of latitude, so plotting lon and lat on the same
+  scale comes out a third too wide and the state reads as the wrong shape. The scale
+  is `min(w/dx, h/dy)` so the aspect ratio survives whatever box it is given.
+- **Map labels are placed against collisions, not at a fixed offset.** Greenville,
+  Cleveland, Greenwood and Grenada sit within about fifty pixels of each other, and a
+  fixed side put names straight through neighbouring markers. Each name takes the
+  first of above / below / right / left that clears every marker and every name
+  already placed. All eleven markers go in as obstacles *before* any name is placed,
+  so the order cannot change the outcome, and the strip above the panel reserved for
+  the date caption is excluded — Southaven is within a hundredth of a degree of the
+  state's northern edge and its name landed on the caption before that rule. The
+  harness asserts no name overlaps another name or another city's marker; placement
+  depends only on coordinates and name length, so checking one day checks all seven.
+- **The map carries the high only.** A low under every marker was a third line of text
+  per city and it pushed the names into each other. The low is in the ranking beside
+  the map, in the table and in the breakdown; the map answers "where is it hot today"
+  and hands the rest off.
+- **A breakdown opened from a marker clears the whole map, not just the marker.**
+  Anchoring it under the dot buried the map it came from, and anchoring it beside the
+  dot buried whichever half of the state the dot was in. `drawMsMap()` returns where
+  the map ends as a fraction of the svg, and `openMsFly(..., beside)` puts the card
+  past that edge, vertically level with the marker. A table cell still gets the card
+  underneath, which is right there. On a phone nothing has room beside it, so both
+  fall back to underneath.
 - **Verification scores what a model *said*, not what it now says.** This is the
   whole reason it uses `previous-runs-api` rather than the ordinary archive.
   `temperature_2m_max_previous_day3` is the high a model published three days before

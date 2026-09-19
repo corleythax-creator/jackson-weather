@@ -144,6 +144,18 @@
   .key i.dashed{height:0;border-top:2px dashed var(--ink-soft);background:none}
   .key i.grad{height:10px;width:56px;border-radius:1px;
     background:linear-gradient(90deg,#C2542B,#C89A55,#8E9C93,#4E9FAA,#3B8AC4)}
+  /* The same ramp the temperature cells use, which is the soil one reversed. */
+  .key i.tgrad{height:10px;width:56px;border-radius:1px;
+    background:linear-gradient(90deg,#3B8AC4,#4E9FAA,#8E9C93,#C89A55,#C2542B)}
+  .msland{fill:rgba(190,214,220,.05);stroke:var(--rule);stroke-width:1.2;
+    stroke-linejoin:round}
+  .msdot{cursor:pointer}
+  .msdot circle{stroke:var(--paper);stroke-width:1.4}
+  .msdot:hover circle,.msdot.sel circle{stroke:var(--ink);stroke-width:2}
+  .msname{fill:var(--ink-soft);font-size:10.5px}
+  .msdot.sel .msname{fill:var(--ink)}
+  .mslo{fill:var(--ink-soft);font-size:9.5px}
+  .msrank text{font-size:12px}
 
   .readout{padding:0 0 14px;margin-bottom:14px;border-bottom:1px solid var(--rule);min-height:62px}
   .readout .line{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:baseline}
@@ -218,6 +230,8 @@
   .stats td .cell i{display:block;font-style:normal;font-size:11px;color:var(--ink-soft)}
   .stats td .who{display:block;font-size:11px;color:var(--ink-soft);font-weight:400}
   .stats th .mon{display:block;font-size:11px;color:var(--ink-soft)}
+  /* Which column the map above is showing. */
+  .stats thead th.on{color:var(--ink);border-bottom-color:var(--hot)}
   .stats tr.avg td{border-bottom:1px solid var(--rule);padding-bottom:7px}
   .stats tr.avg td:first-child{color:var(--ink);font-weight:600}
   .stats tr.spread td{color:var(--ink-soft)}
@@ -277,6 +291,7 @@
     <div class="controls topctl">
       <select id="yearpick" aria-label="Year"></select>
       <select id="fcpick" aria-label="Forecast source" hidden></select>
+      <span class="grp" id="mspick" role="group" aria-label="Day" hidden></span>
     </div>
     <div class="panelpick" id="panelpick" role="tablist" aria-label="Choose a panel"></div>
     <div class="readout" id="readout"><span class="stat">Hover or touch the chart to read a period.</span></div>
@@ -437,6 +452,27 @@ const MS_CITIES=[
   {name:"Grenada",    lat:33.7690, lon:-89.8081},
 ].sort((a,b)=>b.lat-a.lat);
 const MS_DAYS=7;
+// A simplified Mississippi boundary, [lon,lat], clockwise from the north-west corner:
+// the 35th parallel across the top, the Alabama line down the east, the coast and the
+// Pearl River at the bottom, the 31st parallel west, then the Mississippi River back
+// up. Traced by hand at roughly county resolution — it is a frame to place the cities
+// in, not a survey, and the river's meanders are smoothed away. The city coordinates
+// on top of it are the real ones; this is the only drawn thing here that is an
+// approximation, which is why the caption says so.
+const MS_OUTLINE=[
+  [-90.31,35.00],[-89.00,35.00],[-88.20,35.00],
+  [-88.25,34.60],[-88.33,34.00],[-88.38,33.50],[-88.43,33.00],
+  [-88.45,32.40],[-88.47,31.90],[-88.47,31.30],[-88.45,31.00],
+  [-88.42,30.73],[-88.40,30.37],
+  [-88.56,30.34],[-88.80,30.36],[-89.00,30.38],[-89.22,30.32],
+  [-89.42,30.25],[-89.55,30.18],
+  [-89.63,30.40],[-89.78,30.65],[-89.83,30.85],[-89.73,31.00],
+  [-90.50,31.00],[-91.20,31.00],[-91.58,31.00],
+  [-91.51,31.30],[-91.40,31.56],[-91.32,31.80],[-91.16,32.00],
+  [-91.05,32.20],[-90.90,32.35],[-91.00,32.60],[-91.05,32.90],
+  [-91.15,33.15],[-91.06,33.40],[-91.08,33.65],[-91.00,33.90],
+  [-90.90,34.10],[-90.75,34.35],[-90.58,34.60],[-90.45,34.80],
+];
 // Open-Meteo takes comma-separated coordinates and answers with one object per
 // location, so eleven cities need three requests rather than eleven. Chunked instead
 // of sent as one because a slice that fails costs four cities, not all of them — the
@@ -449,7 +485,7 @@ let fcSource=(()=>{
 
 let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
 let msByCity=new Map(), msDays=[], msTried=false, msLoading=false, msErr=[], msSel=null;
-let msNwsDone=false, msNwsMissing=[];
+let msNwsDone=false, msNwsMissing=[], msDay=0;
 let soilOn=false, solarOn=false, activePanel="temp", gran="day";
 let mode="fc", thresh=100, selDate=null;   // the forecast comparison is the landing view
 const HOT_CHOICES=[85,90,95,100,105,110];
@@ -1384,8 +1420,8 @@ function syncButtons(){
   // reachable on them. The year picker does not: that table is always the next
   // MS_DAYS days from today, whatever year is selected.
   $("yearpick").hidden=ms;
-  // No chart on the statewide tab, so no key and nothing to export from it.
-  $("key").hidden=ms;
+  $("mspick").hidden=!ms;
+  $("key").hidden=false;
   // Two-way, not a one-off hide: the export has to come back when the tab does.
   $("dl").hidden=ms;
   $("fcpick").hidden=ms
@@ -1672,13 +1708,126 @@ function drawFc(){
   renderFcTable(solo,rows,dates);
 }
 
+// The map. Equirectangular with a cos(lat) correction on longitude, which is all a
+// state this small needs — without it Mississippi comes out a third too wide. Returns
+// the markup plus the projection, so the click targets and the drawing agree.
+function msProject(box){
+  const lons=MS_OUTLINE.map(p=>p[0]), lats=MS_OUTLINE.map(p=>p[1]);
+  const w=[Math.min(...lons),Math.max(...lons)], h=[Math.min(...lats),Math.max(...lats)];
+  const k=Math.cos((h[0]+h[1])/2*Math.PI/180);
+  const dx=(w[1]-w[0])*k, dy=h[1]-h[0];
+  const sc=Math.min(box.w/dx,box.h/dy);
+  const ox=box.x+(box.w-dx*sc)/2, oy=box.y+(box.h-dy*sc)/2;
+  return {
+    x:lon=>ox+(lon-w[0])*k*sc,
+    y:lat=>oy+(h[1]-lat)*sc,
+    w:dx*sc, h:dy*sc, left:ox, top:oy
+  };
+}
+
+function drawMsMap(rows,date){
+  const M=isMobile();
+  const W=M?380:1000;
+  const mapW=M?330:400, mapH=M?430:540, top=M?34:40;
+  const P=msProject({x:M?(W-mapW)/2:20, y:top, w:mapW, h:mapH});
+  const H=top+mapH+(M?16:22);
+
+  // Coloured against the other cities on this day, the same ranking the table uses.
+  const vs=rows.map(r=>r.rec.hi).filter(v=>v!=null);
+  const lo=vs.length?Math.min(...vs):0, hi=vs.length?Math.max(...vs):1;
+  const col=v=>{ const f=hi>lo?(v-lo)/(hi-lo):0.5;
+    const [r,g,b]=ramp(f*100,TEMP_STOPS); return `rgb(${r},${g},${b})`; };
+
+  let s=`<polygon class="msland" points="`
+    +MS_OUTLINE.map(([ln,lt])=>`${P.x(ln).toFixed(1)},${P.y(lt).toFixed(1)}`).join(" ")+`"/>`;
+
+  // Four Delta cities sit within about fifty pixels of each other, so a fixed label
+  // side puts names straight through neighbouring markers. Each name takes the first
+  // of above / below / right / left that clears every marker and every name already
+  // placed; the markers all go in as obstacles first so ordering cannot matter.
+  const rr=M?12:11.5, lh=12, pad=2;
+  const pts=rows.map(r=>({r, x:P.x(r.city.lon), y:P.y(r.city.lat)}));
+  const boxes=pts.map(p=>({x1:p.x-rr,y1:p.y-rr,x2:p.x+rr,y2:p.y+rr}));
+  // The strip above `top` belongs to the date caption, so a label may not reach it —
+  // Southaven sits within a hundredth of a degree of the state's northern edge and
+  // its name landed straight on the caption before this.
+  const clear=b=>b.x1>=4&&b.x2<=W-4&&b.y1>=top-1
+    &&!boxes.some(o=>!(b.x2<=o.x1||b.x1>=o.x2||b.y2<=o.y1||b.y1>=o.y2));
+  pts.forEach(p=>{
+    const hw=p.r.city.name.length*2.9+3;          // ~5.8px a character at 10.5px
+    p.lab=[
+      {x:p.x, y:p.y-rr-5,  a:"middle", b:{x1:p.x-hw,y1:p.y-rr-5-lh,x2:p.x+hw,y2:p.y-rr-3}},
+      {x:p.x, y:p.y+rr+13, a:"middle", b:{x1:p.x-hw,y1:p.y+rr+3,x2:p.x+hw,y2:p.y+rr+15}},
+      {x:p.x+rr+4, y:p.y+4, a:"start",
+       b:{x1:p.x+rr+3,y1:p.y-6,x2:p.x+rr+5+2*hw,y2:p.y+6}},
+      {x:p.x-rr-4, y:p.y+4, a:"end",
+       b:{x1:p.x-rr-5-2*hw,y1:p.y-6,x2:p.x-rr-3,y2:p.y+6}},
+    ].find(c=>clear(c.b)) || {x:p.x, y:p.y+rr+13, a:"middle",
+       b:{x1:p.x-hw,y1:p.y+rr+3,x2:p.x+hw,y2:p.y+rr+15}};
+    boxes.push({x1:p.lab.b.x1-pad,y1:p.lab.b.y1-pad,x2:p.lab.b.x2+pad,y2:p.lab.b.y2+pad});
+  });
+
+  pts.forEach(p=>{
+    const h=p.r.rec.hi;
+    const n=h==null?"—":String(Math.round(h));
+    const f=Math.min(11.5,(2*rr-4)/(n.length*0.6));
+    const sel=msSel&&msSel.name===p.r.city.name&&msSel.date===date;
+    s+=`<g class="msdot${sel?" sel":""}" data-city="${esc(p.r.city.name)}" data-date="${date}" `
+      +`tabindex="0" role="button" `
+      +`aria-label="${esc(p.r.city.name)}: high ${n}, low `
+      +`${p.r.rec.lo==null?"unknown":Math.round(p.r.rec.lo)}. Show the source breakdown">`
+      +`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${rr}" `
+      +`fill="${h==null?"var(--rule)":col(h)}"/>`
+      +`<text x="${p.x.toFixed(1)}" y="${(p.y+f*0.35).toFixed(1)}" text-anchor="middle" `
+      +`fill="#10191F" font-size="${f.toFixed(1)}" font-weight="600" `
+      +`style="font-variant-numeric:tabular-nums">${n}</text>`
+      +`<text class="msname" x="${p.lab.x.toFixed(1)}" y="${p.lab.y.toFixed(1)}" `
+      +`text-anchor="${p.lab.a}">${esc(p.r.city.name)}</text>`
+      +`</g>`;
+  });
+
+  // Desktop has room beside a state this narrow, so the same day is repeated as a
+  // ranking — the map answers "where", the bars answer "by how much". The low goes
+  // here rather than under every marker, where it crowded the names off the map.
+  if(!M){
+    const bx=470, bw=430, sorted=pts.filter(p=>p.r.rec.hi!=null)
+      .slice().sort((a,b)=>b.r.rec.hi-a.r.rec.hi);
+    const step=Math.min(38,mapH/Math.max(1,sorted.length));
+    const barLo=Math.floor(lo-2), barHi=Math.ceil(hi+1);
+    const bs=v=>(v-barLo)/((barHi-barLo)||1)*(bw-190);
+    s+=`<text class="panellabel" x="${bx}" y="${top-10}">`
+      +`Warmest to coolest &mdash; daily high, with the overnight low</text>`
+      +`<g class="msrank">`;
+    sorted.forEach((p,i)=>{
+      const y=top+10+i*step, sel=msSel&&msSel.name===p.r.city.name&&msSel.date===date;
+      const w=Math.max(2,bs(p.r.rec.hi));
+      s+=`<text x="${bx}" y="${(y+4).toFixed(1)}" `
+        +`fill="var(--${sel?"ink":"ink-soft"})">${esc(p.r.city.name)}</text>`
+        +`<rect x="${bx+110}" y="${(y-7).toFixed(1)}" width="${w.toFixed(1)}" `
+        +`height="13" rx="1" fill="${col(p.r.rec.hi)}" opacity="${sel?1:.85}"/>`
+        +`<text x="${(bx+118+w).toFixed(1)}" y="${(y+4).toFixed(1)}" fill="var(--ink)" `
+        +`style="font-variant-numeric:tabular-nums">${Math.round(p.r.rec.hi)}°`
+        +`<tspan fill="var(--ink-soft)"> / ${p.r.rec.lo==null?"—":Math.round(p.r.rec.lo)+"°"}`
+        +`</tspan></text>`;
+    });
+    s+=`</g>`;
+  }
+  s+=`<text class="panellabel" x="${P.left.toFixed(0)}" y="${top-10}">`
+    +`${WDAYS[new Date(date+"T12:00:00").getDay()]} ${+date.slice(8)} `
+    +`${MONTHS[+date.slice(5,7)-1]} &mdash; daily high °F</text>`;
+  // Where the map ends as a fraction of the svg, so the breakdown can clear it
+  // rather than landing on whichever half of the state the marker happens to be in.
+  return {svg:s,W,H,right:M?1:(20+mapW)/W};
+}
+
 function drawMs(){
   $("fig").hidden=false;
   const M=isMobile(), box=$("fcsrc");
   $("key").innerHTML=""; $("stats").hidden=true;
   const rows=MS_CITIES.filter(c=>msByCity.has(c.name));
   if(!rows.length||!msDays.length){
-    box.hidden=true; $("hint2").textContent="";
+    box.hidden=true; $("hint2").textContent=""; $("mspick").innerHTML="";
+    $("chart").innerHTML=""; $("chart")._geom=null;
     $("readout").innerHTML=`<span class="stat">${msLoading?"Loading…":"Nothing to show."}</span>`;
     $("stand").innerHTML=msLoading||!msTried
       ? `Fetching every model's next ${MS_DAYS} days for the `
@@ -1688,6 +1837,37 @@ function drawMs(){
         +`. Open-Meteo may be rate-limiting this browser; it clears on its own.`;
     return;
   }
+  // The day the map is showing. Clamped rather than reset, so a short response
+  // cannot leave the picker pointing past the end of the week.
+  msDay=Math.max(0,Math.min(msDays.length-1,msDay));
+  const day=msDays[msDay];
+  $("mspick").innerHTML=msDays.map((d,i)=>{
+    const t=new Date(d+"T12:00:00");
+    return `<button data-msday="${i}" aria-pressed="${i===msDay}">`
+      +`${WDAYS[t.getDay()]} ${+d.slice(8)}</button>`;
+  }).join("");
+  $("mspick").querySelectorAll("[data-msday]").forEach(b=>b.onclick=()=>{
+    msDay=+b.dataset.msday; draw();
+  });
+
+  const mapRows=rows.map(c=>({city:c,rec:msByCity.get(c.name).get(day)}))
+    .filter(r=>r.rec);
+  const map=drawMsMap(mapRows,day);
+  const svg=$("chart");
+  svg.setAttribute("viewBox",`0 0 ${map.W} ${map.H}`);
+  svg.innerHTML=map.svg; svg._geom=null; svg._msRight=map.right;
+  svg.querySelectorAll("g.msdot").forEach(g=>{
+    const open=()=>{
+      const same=msSel&&msSel.name===g.dataset.city&&msSel.date===g.dataset.date;
+      if(same) closeMsFly(); else openMsFly(g.dataset.city,g.dataset.date,g,true);
+    };
+    g.onclick=open;
+    g.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } };
+  });
+  $("key").innerHTML=`<span>Coolest <i class="tgrad"></i> warmest, among these `
+    +`cities on the day shown</span>`
+    +`<span style="color:var(--ink-soft)">Outline simplified; city positions exact</span>`;
+
   const deg=M?"":"°";
   const nice=t=>`${WDAYS[new Date(t+"T12:00:00").getDay()]}<span class="mon">`
     +`${+t.slice(8)} ${MONTHS[+t.slice(5,7)-1]}</span>`;
@@ -1738,7 +1918,8 @@ function drawMs(){
     +`<b style="color:#C2542B">red</b> the warmest. `
     +`<b>Tap any temperature</b> for the model-by-model breakdown behind it.</p>`
     +`<div class="scroller"><table><thead><tr><th>City</th>`
-    +msDays.map(d=>`<th>${nice(d)}</th>`).join("")+`</tr></thead><tbody>`
+    +msDays.map(d=>`<th${d===day?' class="on"':''}>${nice(d)}</th>`).join("")
+    +`</tr></thead><tbody>`
     +rows.map(c=>{
         const m=msByCity.get(c.name);
         return `<tr><td>${esc(c.name)}</td>`
@@ -1772,18 +1953,20 @@ function drawMs(){
   });
   markMsSel();
 
-  $("stand").innerHTML=`<b>${rows.length}</b> Mississippi cities north to south, the `
-    +`next <b>${msDays.length}</b> days, each figure the average of ${srcs} forecast `
-    +`sources including <b>NWS</b>. Tap a temperature to see what each one said.`;
+  $("stand").innerHTML=`<b>${rows.length}</b> Mississippi cities, the next `
+    +`<b>${msDays.length}</b> days, each figure the average of ${srcs} forecast sources `
+    +`including <b>NWS</b>. The map takes one day at a time; the table below has the `
+    +`whole week, north to south. Tap a city either way to see what each source said.`;
   $("hint2").textContent="Read down a column to find the warmest city that day, "
     +"across a row to see one city's week.";
-  $("readout").innerHTML=`<span class="stat">Average daily high and overnight low. `
-    +`Tap any figure for its breakdown.</span>`;
+  $("readout").innerHTML=`<span class="stat">The map shows the average daily high; `
+    +`the table below carries the low too. Tap a city or a figure for its `
+    +`breakdown.</span>`;
 }
 
 // The breakdown behind one figure. Anchored to the cell and clamped inside the
 // figure, the same way the day-history card is.
-function openMsFly(name,date,el){
+function openMsFly(name,date,el,beside){
   const fly=$("msfly"), m=msByCity.get(name), rec=m&&m.get(date);
   if(!fly||!rec){ closeMsFly(); return; }
   msSel={name,date};
@@ -1814,9 +1997,21 @@ function openMsFly(name,date,el){
   fly.hidden=false;
   fly.querySelector(".x").onclick=closeMsFly;
   const fig=$("fig"), fr=fig.getBoundingClientRect(), er=el.getBoundingClientRect();
-  fly.style.left=Math.max(8,Math.min(fr.width-fly.offsetWidth-8,
-    er.left-fr.left+er.width/2-fly.offsetWidth/2)).toFixed(0)+"px";
-  fly.style.top=(er.bottom-fr.top+6).toFixed(0)+"px";
+  const w=fly.offsetWidth, h=fly.offsetHeight;
+  // A table cell wants the card under it. A map marker does not: dropping it there
+  // covers the map the marker is on, so it goes to whichever side has room and only
+  // falls back to underneath when neither does.
+  const svg=$("chart"), sr=svg.getBoundingClientRect();
+  const mapEnd=sr.left-fr.left+sr.width*(svg._msRight||1);
+  if(beside&&fr.width-mapEnd>w+20){
+    fly.style.left=(mapEnd+16).toFixed(0)+"px";
+    fly.style.top=Math.max(4,Math.min(fig.offsetHeight-h-4,
+      er.top-fr.top+er.height/2-h/2)).toFixed(0)+"px";
+  }else{
+    fly.style.left=Math.max(8,Math.min(fr.width-w-8,
+      er.left-fr.left+er.width/2-w/2)).toFixed(0)+"px";
+    fly.style.top=(er.bottom-fr.top+6).toFixed(0)+"px";
+  }
   markMsSel();
 }
 function closeMsFly(){
@@ -1824,9 +2019,12 @@ function closeMsFly(){
   const f=$("msfly"); if(f&&!f.hidden){ f.hidden=true; f.innerHTML=""; }
   markMsSel();
 }
+// The same figure exists as a table cell and as a map marker, so both follow the
+// selection; the rank bars are redrawn with it, which is why they are not touched here.
 function markMsSel(){
-  $("fcsrc").querySelectorAll("button.msbtn").forEach(b=>b.classList.toggle("sel",
-    !!msSel&&b.dataset.city===msSel.name&&b.dataset.date===msSel.date));
+  const hit=el=>!!msSel&&el.dataset.city===msSel.name&&el.dataset.date===msSel.date;
+  $("fcsrc").querySelectorAll("button.msbtn").forEach(b=>b.classList.toggle("sel",hit(b)));
+  $("chart").querySelectorAll("g.msdot").forEach(g=>g.classList.toggle("sel",hit(g)));
 }
 
 function drawVer(){
@@ -2425,8 +2623,8 @@ function weatherGlyph(kind,cx,top,size,fc){
 function draw(){
   closeFly();                 // the card is anchored to a bucket; a redraw moves it
   closeMsFly();               // likewise: the breakdown is anchored to a table cell
-  // The statewide table is not a chart, and it does not depend on cities[] at all.
-  $("chart").style.display=mode==="ms"?"none":"";
+  // The statewide tab draws a map into the same svg, and does not depend on
+  // cities[] at all — hence the dispatch before the cities[] guard below.
   if(mode==="ms") return drawMs();
   if(!cities.length) return;
   if(mode==="hot") return drawHot();
@@ -3042,7 +3240,8 @@ function headline(solo){
   // cells handle their own toggle, so this listener must leave them alone — it runs
   // after their handler, when msSel already names the cell just clicked.
   document.addEventListener("click",e=>{
-    if(e.target.closest("#msfly")||e.target.closest("button.msbtn")) return;
+    if(e.target.closest("#msfly")||e.target.closest("button.msbtn")
+       ||e.target.closest("g.msdot")) return;
     closeMsFly();
   });
   document.addEventListener("keydown",e=>{
