@@ -349,6 +349,14 @@ Changing these without understanding why breaks correctness, not just appearance
   desktop, so Columbus's marker is proportionally closer and "above" misses by about
   half a pixel. A name below the dot beats a name touching a marker, so that is left
   rather than tuned to the pixel.
+- **A place dot is an obstacle before any label is placed, which is why `wide`
+  exists.** Rolling Fork sits about 33px from Yazoo City on a phone, and because
+  every place's dot goes into `boxes` up front, it crowded Yazoo City's name out even
+  when its own label was placed last — demoting it made no difference, because the
+  dot blocks regardless of label order. `wide:1` drops a place from the phone map
+  entirely, which is the only thing that frees the space. Proven by removing Rolling
+  Fork outright and watching Belzoni and Yazoo City both fit. Reach for it only when
+  a place is provably the one crowding another out, not as a way to thin a busy map.
 - **A place that cannot be placed clear is dropped, not drawn on top.** `place()`
   returns false when no candidate clears, and `drawMs()` renders only the places that
   fit. A station always draws — it carries a number, so it falls back to below and
@@ -380,6 +388,15 @@ Changing these without understanding why breaks correctness, not just appearance
   three routes outside. Watch the sign when nudging an endpoint: longitudes here are
   negative, so *east* is the larger number, and "move it inside" on the Alabama line
   means more negative, not less.
+- **`MS_FILL` tints the counties that hold a city, and it is generated, not curated.**
+  The 26 counties containing a station or a place dot are emitted as closed rings by
+  the same build step that produces `MS_OUTLINE` and `MS_COUNTIES`, from the same
+  Census source, by testing each city point against each county polygon. Simplified
+  a shade tighter (0.008° against 0.012°) because the county lines draw *over* the
+  fills: a fill sitting a hair inside its own outline is hidden, one that spills past
+  it is not. **Regenerate it whenever `MS_CITIES` or `MS_PLACES` changes**, or a new
+  city sits in an untinted county — the scratch harness checks both directions, that
+  every city is inside a tinted ring and that no tinted ring is empty.
 - **County lines are the faintest thing on the page, and one element.** All 202 of
   them are a single `<path>` rather than 202 polylines: the same picture, a fraction
   of the DOM, and nothing about them needs to be addressable. They are stroked at
