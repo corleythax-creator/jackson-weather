@@ -52,8 +52,10 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 
 - **Forecast tab (the landing view)** — every forecast source's daily high, day by day.
   A chart with the full spread as a band, each model a thin line and the chosen source
-  picked out; a table beneath with every source's high and low plus a spread row. The
-  point is to find the row matching whatever forecast you trust and pick it.
+  picked out; a table beneath with an **average** row on top, every source's high and
+  low shaded blue-to-red by where it falls among the sources that day, then spread and
+  source-count rows. The point is to find the row matching whatever forecast you trust
+  and pick it.
 - **Timeline tab** — temperature (high/low/mean + 25-year normal band), rainfall,
   and two optional panels: soil moisture percentile and solar/UV.
 - **Day condition symbols** — one glyph per day in a row above the panels, from the
@@ -132,6 +134,19 @@ Changing these without understanding why breaks correctness, not just appearance
   Instead: a band for the full spread, every model a thin muted line, NWS in the today
   green when it is not the choice, and the chosen source bold with labelled circles.
   The chart answers "how much do they agree", the table answers "which one is this".
+- **The table's colour ramp is `SOIL_STOPS` reversed, not a new palette.**
+  `TEMP_STOPS` is the soil scale read the other way — coolest blue, middle grey,
+  warmest red — so the page keeps one colour language instead of gaining a second.
+  Shading is computed **per column**: a cell's position is its rank among the sources
+  *for that day*, not against the whole table, which is the only reading that answers
+  "is this source warm or cool for this day". A day where every source agrees sits at
+  the neutral middle rather than being ranked on noise. The tint is 50% alpha, which
+  keeps white text at 4.99:1 at its worst point across the ramp — checked, not assumed.
+- **The average row is measured against the sources, not against itself.** It is
+  excluded from the per-day min/max used for shading, so adding it cannot move the
+  scale. It is a mean over whatever sources reach that day, which shrinks as NWS and
+  the shorter models run out — hence the **Sources** row, so an average over five
+  models is never mistaken for one over twelve.
 - **A source that does not cover the point never becomes a row.** `absorbAlt()` drops
   a model whose arrays are all null, and `fcRows()` only lists maps with entries, so a
   model with no coverage is absent rather than a row of dashes. Verified by stubbing
