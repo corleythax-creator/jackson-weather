@@ -51,8 +51,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 ## Feature map
 
 - **Forecast tab (the landing view)** — every forecast source's daily high, day by day.
-  A chart with the full spread as a band, each model a thin line and the chosen source
-  picked out; a table beneath with an **average** row on top, every source's high and
+  The chart's headline line is the **average of all sources**, with the full spread as
+  a band, every model a thin line and the chosen source drawn alongside in green; a
+  table beneath with an **average** row on top, every source's high and
   low shaded blue-to-red by where it falls among the sources that day, then spread and
   source-count rows. The point is to find the row matching whatever forecast you trust
   and pick it.
@@ -129,6 +130,25 @@ Changing these without understanding why breaks correctness, not just appearance
   Jackson reached. An earlier change let NWS take today on the theory that a
   non-observation should defer to NWS; it was reverted, because "not measured" does
   not mean "worse".
+- **The cache key is derived from the request URL, not from the city.** `grabCached()`
+  hashes the URL into `jw:<tag>:<hash>`. Keying on city alone meant that growing the
+  model list from five to thirteen left every browser holding the old cached call
+  showing five sources while a fresh phone showed thirteen — the same app, visibly
+  different data, for as long as the TTL lasted. Any change to what a request *asks
+  for* must change its key, and deriving the key from the URL is the only way to get
+  that for free. Verified: two URLs produce two entries, each serves its own response,
+  and a repeat is served from storage without a call.
+- **The Forecast chart's line is the average, not the chosen source.** One number a
+  day beats asking the eye to pick one model out of a dozen, and the labelled circles
+  ride it. The chosen source stays drawn in green so the picker still means something
+  on this tab — and because it is what the Timeline tab uses.
+- **The forecast table is squeezed on mobile, and that costs content.** Seventeen
+  columns will not fit a phone, so below 720px it drops the agency sub-labels, halves
+  the padding, prints the month only where it changes, omits the degree sign (the
+  heading carries °F) and rounds the average to whole degrees. That took the table
+  from 1133px to 542px — still scrolling, but half as far. A tenth of a degree on a
+  forecast mean is false precision anyway; do not "restore" it on mobile without
+  measuring what it costs.
 - **The Forecast tab draws a plume, not fourteen coloured lines.** Thirteen equally
   weighted colours would be unreadable and would need a palette the app does not have.
   Instead: a band for the full spread, every model a thin muted line, NWS in the today

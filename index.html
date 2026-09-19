@@ -196,6 +196,7 @@
   .stats td .cell b{font-weight:600}
   .stats td .cell i{display:block;font-style:normal;font-size:11px;color:var(--ink-soft)}
   .stats td .who{display:block;font-size:11px;color:var(--ink-soft);font-weight:400}
+  .stats th .mon{display:block;font-size:11px;color:var(--ink-soft)}
   .stats tr.avg td{border-bottom:1px solid var(--rule);padding-bottom:7px}
   .stats tr.avg td:first-child{color:var(--ink);font-weight:600}
   .stats tr.spread td{color:var(--ink-soft)}
@@ -219,6 +220,15 @@
     .readout .stat b{font-size:17px}
     .key{font-size:12.5px;gap:10px 16px}
     footer{font-size:12.5px}
+    /* The forecast table is 17 columns wide. It will still scroll on a phone, but
+       dropping the agency sub-labels and the padding roughly halves how far. */
+    .stats table{min-width:0}
+    .stats th,.stats td{padding:3px 2px;font-size:12px}
+    .stats th:first-child,.stats td:first-child{min-width:0;padding-right:6px}
+    .stats td .who,.stats th .mon{font-size:10px}
+    .stats td .who{display:none}
+    .stats td .cell{padding:2px 3px}
+    .stats td .cell i{font-size:10px}
   }
 </style>
 
@@ -528,10 +538,10 @@ async function loadCity(city){
   // for the current year; past years come entirely from the archive.
   const reqs=[grabCached(`${archBase}?latitude=${city.lat}&longitude=${city.lon}`
     +`&start_date=${START}&end_date=${OBS_END}${varsA}${units}`,
-    `jw:cur:1:${city.key}:${year}`, IS_CURRENT?TTL_LIVE:TTL_STATIC)];
+    "cur", IS_CURRENT?TTL_LIVE:TTL_STATIC)];
   if(IS_CURRENT) reqs.push(grabCached(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}`
     +`&longitude=${city.lon}${varsF}${units}&past_days=14&forecast_days=${FC_DAYS}`,
-    `jw:fc:1:${city.key}`, TTL_LIVE));
+    "fc", TTL_LIVE));
 
   const res=await Promise.allSettled(reqs);
   if(res[0].status==="fulfilled") absorb(city,res[0].value,"archive");
@@ -611,7 +621,7 @@ async function maybeLoadAlt(city){
   try{
     const j=await grabCached(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}`
       +`&longitude=${city.lon}&daily=temperature_2m_max,temperature_2m_min${units}`
-      +`&forecast_days=${FC_DAYS}&models=${ALT_MODELS}`, `jw:alt:1:${city.key}`, TTL_LIVE);
+      +`&forecast_days=${FC_DAYS}&models=${ALT_MODELS}`, "alt", TTL_LIVE);
     absorbAlt(city,j);
   }catch(e){ /* the comparison simply stays unavailable */ }
   if(cities.length===1&&cities[0]===city){ applySource(city); draw(); }
@@ -718,7 +728,7 @@ async function maybeLoadClim(){
     c.climRaw=await grabCached(`${archBase}?latitude=${c.lat}&longitude=${c.lon}`
       +`&start_date=${CLIM_FROM}-01-01&end_date=${CLIM_TO}-12-31`
       +`&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,shortwave_radiation_sum${units}`,
-      `jw:clim:1:${c.key}:${CLIM_FROM}-${CLIM_TO}`, TTL_STATIC);
+      "clim", TTL_STATIC);
     c.clim=buildClim(c.climRaw);
   }catch(e){ c.clim=null; }
   $("fig").classList.remove("pending");
@@ -765,8 +775,14 @@ function lsSet(key,d){
 }
 // grab(), but served from storage when a fresh copy is there. A 200 carrying
 // {error:true,reason} has no daily/hourly block and is never cached.
+// The key is derived from the URL, so a cached answer can never be served for a
+// different request. Keying on the city alone meant that growing the model list from
+// five to thirteen left every browser holding the old cached call showing five
+// sources for half an hour, while a fresh phone showed thirteen.
+const hashStr=t=>{let h=5381;for(let i=0;i<t.length;i++)h=(h*33^t.charCodeAt(i))>>>0;return h.toString(36);};
 let usedStale=false;          // reset per city load, reported in the footer
-async function grabCached(url,key,ttl){
+async function grabCached(url,tag,ttl){
+  const key=`jw:${tag}:${hashStr(url)}`;
   const hit=lsGet(key,ttl); if(hit) return hit;
   try{
     const j=await grab(url);
@@ -780,6 +796,12 @@ async function grabCached(url,key,ttl){
     throw e;
   }
 }
+
+// One-off: the previous scheme keyed on city rather than request, so those entries
+// can never be hit again and would only take room.
+try{ Object.keys(localStorage)
+  .filter(k=>/^jw:(cur|fc|alt|clim|soilcur|soilbase):1:/.test(k))
+  .forEach(k=>localStorage.removeItem(k)); }catch(e){}
 
 const HIST_CACHE_V=1, HIST_MAX_AGE=30*864e5;     // ERA5 is revised occasionally
 const histKey=city=>`jw:hist:${HIST_CACHE_V}:${city.key}:${HIST_FROM}-${HIST_TO}`;
@@ -956,12 +978,12 @@ async function maybeLoadSoil(){
   try{
     const q=`&hourly=${SOIL_BAND}&timezone=auto`;
     const cur=grabCached(`${archBase}?latitude=${c.lat}&longitude=${c.lon}&start_date=${START}&end_date=${OBS_END}${q}`,
-      `jw:soilcur:1:${c.key}:${year}`, IS_CURRENT?TTL_LIVE:TTL_STATIC);
+      "soilcur", IS_CURRENT?TTL_LIVE:TTL_STATIC);
     // The baseline is calendar data, so fetch it once and reuse across year changes.
     if(!c.soilBase)
       c.soilBase=dailyMean(await grabCached(`${archBase}?latitude=${c.lat}&longitude=${c.lon}`
         +`&start_date=${SOIL_FROM}-01-01&end_date=${SOIL_TO}-12-31${q}`,
-        `jw:soilbase:1:${c.key}:${SOIL_FROM}-${SOIL_TO}`, TTL_STATIC));
+        "soilbase", TTL_STATIC));
     c.soil=buildSoil(dailyMean(await cur),c.soilBase);
     if(!c.soil.size) c.soil=null; else fitApi(c);
   }catch(e){ c.soil=null; }
@@ -1309,7 +1331,8 @@ function drawFc(){
   // Spread band: how far apart the sources are on each day.
   const band=dates.map((t,i)=>{
     const vs=rows.map(r=>r.map.get(t)).filter(v=>v&&v.hi!=null).map(v=>v.hi);
-    return vs.length?{i,min:Math.min(...vs),max:Math.max(...vs),n:vs.length}:null;
+    return vs.length?{i,min:Math.min(...vs),max:Math.max(...vs),n:vs.length,
+                      avg:vs.reduce((a,b)=>a+b,0)/vs.length}:null;
   }).filter(Boolean);
   if(band.length>1){
     const top=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.max).toFixed(1)}`);
@@ -1321,10 +1344,14 @@ function drawFc(){
       return (v&&v.hi!=null)?`${X(i).toFixed(1)},${Y(v.hi).toFixed(1)}`:null;}).filter(Boolean);
     return pts.length>1?`<polyline class="${cls}" ${extra||""} points="${pts.join(" ")}"/>`:"";
   };
-  rows.forEach(r=>{ if(r.id!==fcSource&&r.id!=="nws") s+=line(r,"fcthin"); });
-  if(fcSource!=="nws"){ const n=rows.find(r=>r.id==="nws"); if(n) s+=line(n,"fcnws"); }
+  // The average is the headline line: one number a day, rather than asking the eye
+  // to pick one model out of a dozen. The chosen source stays on as a reference so
+  // the picker still means something here.
+  rows.forEach(r=>{ if(r.id!==fcSource) s+=line(r,"fcthin"); });
   const pick=rows.find(r=>r.id===fcSource);
-  if(pick) s+=line(pick,"fcpick2");
+  if(pick) s+=line(pick,"fcnws");
+  const apts=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.avg).toFixed(1)}`);
+  if(apts.length>1) s+=`<polyline class="fcpick2" points="${apts.join(" ")}"/>`;
 
   // Today, then a label under every day the axis has room for.
   const maxLab=M?5:14, lstep=Math.max(1,Math.ceil(dates.length/maxLab));
@@ -1333,29 +1360,30 @@ function drawFc(){
     s+=`<line class="monthrule" x1="${X(i).toFixed(1)}" y1="${T}" x2="${X(i).toFixed(1)}" y2="${T+BH}"/>`
       +`<text x="${X(i).toFixed(1)}" y="${XLAB}" text-anchor="middle">${+t.slice(8)}</text>`;
   });
-  if(pick){
+  {
     const rr=M?10:11.5, sp=dates.length<2?iw:iw/(dates.length-1);
-    if(sp>=2*rr) dates.forEach((t,i)=>{
-      const v=pick.map.get(t); if(!v||v.hi==null) return;
-      const n=String(Math.round(v.hi)), f=Math.min(M?10:10.5,(2*rr-3)/(n.length*0.6));
-      s+=`<circle cx="${X(i).toFixed(1)}" cy="${Y(v.hi).toFixed(1)}" r="${rr}" fill="var(--paper)" `
+    if(sp>=2*rr) band.forEach(b=>{
+      const n=String(Math.round(b.avg)), f=Math.min(M?10:10.5,(2*rr-3)/(n.length*0.6));
+      s+=`<circle cx="${X(b.i).toFixed(1)}" cy="${Y(b.avg).toFixed(1)}" r="${rr}" fill="var(--paper)" `
         +`stroke="var(--hot)" stroke-width="1.4"/>`
-        +`<text class="dnode" x="${X(i).toFixed(1)}" y="${(Y(v.hi)+f*0.35).toFixed(1)}" `
+        +`<text class="dnode" x="${X(b.i).toFixed(1)}" y="${(Y(b.avg)+f*0.35).toFixed(1)}" `
         +`text-anchor="middle" fill="var(--hot)" font-size="${f.toFixed(1)}">${n}</text>`;
     });
   }
-  s+=`<text class="panellabel" x="${L}" y="${T-12}">Daily high °F by forecast source</text>`;
+  s+=`<text class="panellabel" x="${L}" y="${T-12}">Daily high °F — average of all sources</text>`;
   svg.innerHTML=s; svg._geom=null;
 
   const worst=band.reduce((a,b)=>Math.max(a,b.max-b.min),0);
   const pickName=(FC_MODELS.find(m=>m.id===fcSource)||{}).label||fcSource;
-  $("key").innerHTML=`<span><i style="background:var(--hot)"></i>${esc(pickName)}, showing</span>`
-    +(fcSource!=="nws"&&rows.some(r=>r.id==="nws")?`<span><i style="background:var(--today)"></i>NWS</span>`:``)
-    +`<span><i style="background:var(--ink-soft)"></i>Other sources</span>`
+  $("key").innerHTML=`<span><i style="background:var(--hot)"></i>Average of all sources</span>`
+    +(pick?`<span><i style="background:var(--today)"></i>${esc(pickName)}, your pick</span>`:``)
+    +`<span><i style="background:var(--ink-soft)"></i>Every other source</span>`
     +`<span><i class="swatch"></i>Full spread</span>`;
-  $("stand").innerHTML=`<b>${esc(solo.label)}</b> — <b>${rows.length}</b> forecast sources over `
-    +`<b>${dates.length}</b> days. They disagree by as much as <b>${worst.toFixed(0)}°F</b> on a `
-    +`single day. The chart is showing <b>${esc(pickName)}</b>; change it with the source menu.`;
+  $("stand").innerHTML=`<b>${esc(solo.label)}</b> — the line is the <b>average</b> of `
+    +`<b>${rows.length}</b> forecast sources over <b>${dates.length}</b> days. They disagree by `
+    +`as much as <b>${worst.toFixed(0)}°F</b> on a single day`
+    +(pick?`; <b>${esc(pickName)}</b> is drawn alongside it in green, and is what the `
+      +`Timeline tab uses.`:`.`);
   $("hint2").textContent="Read down a column for how far apart the sources are on one day, "
     +"across a row to find the one matching a forecast you trust.";
   $("stats").hidden=true;
@@ -2141,7 +2169,11 @@ function draw(){
 // across the top. Highs are what people compare, so they lead; the overnight low sits
 // under each one. A source that does not cover this point never became a row.
 function renderFcTable(solo,rows,dates){
-  const box=$("fcsrc");
+  const box=$("fcsrc"), M=isMobile();
+  // Seventeen columns will not fit a phone whatever happens, but the degree sign is
+  // ~6px on every one of them and the heading already says °F. Dropping it there is
+  // worth about a hundred pixels of scrolling.
+  const deg=M?"":"°";
   // Per day: the sources' own range, which every cell in that column is shaded
   // against. The average is measured against the sources, not against itself.
   const stat=dates.map(t=>{
@@ -2162,11 +2194,13 @@ function renderFcTable(solo,rows,dates){
   };
   const cell=(v,k,dp)=>{
     if(!v||v.hi==null) return `<td>&mdash;</td>`;
-    const f=x=>dp?x.toFixed(1):String(Math.round(x));
-    return `<td><span class="cell" style="${shade(v.hi,k)}"><b>${f(v.hi)}°</b>`
-      +(v.lo!=null?`<i>${f(v.lo)}°</i>`:``)+`</span></td>`;
+    // The average carries a decimal on desktop; on a phone it is the widest cell in
+    // every column and a tenth of a degree on a forecast mean is false precision.
+    const f=x=>(dp&&!M)?x.toFixed(1):String(Math.round(x));
+    return `<td><span class="cell" style="${shade(v.hi,k)}"><b>${f(v.hi)}${deg}</b>`
+      +(v.lo!=null?`<i>${f(v.lo)}${deg}</i>`:``)+`</span></td>`;
   };
-  box.innerHTML=`<h2>Every forecast source, day by day</h2>`
+  box.innerHTML=`<h2>Every forecast source, day by day &mdash; °F</h2>`
     +`<p class="lede">Daily high, with the overnight low beneath it. Each temperature is `
     +`shaded by where it falls among the sources for <em>that day</em> — `
     +`<b style="color:#3B8AC4">blue</b> the coolest of them, `
@@ -2174,7 +2208,10 @@ function renderFcTable(solo,rows,dates){
     +`trust and pick it from the <b>source menu</b> above; the chart follows it and the `
     +`choice sticks on this browser.</p>`
     +`<div class="scroller"><table><thead><tr><th>Source</th>`
-    +dates.map(t=>`<th>${pretty(t)}</th>`).join("")+`</tr></thead><tbody>`
+    +dates.map((t,i)=>{
+      const mon=i===0||t.slice(5,7)!==dates[i-1].slice(5,7);
+      return `<th>${+t.slice(8)}`+(mon?`<span class="mon">${MONTHS[+t.slice(5,7)-1]}</span>`:``)+`</th>`;
+    }).join("")+`</tr></thead><tbody>`
     +`<tr class="avg"><td>Average`
       +`<span class="who">mean of the sources reaching each day</span></td>`
     +stat.map((st,k)=>cell(st,k,true)).join("")+`</tr>`
@@ -2182,7 +2219,7 @@ function renderFcTable(solo,rows,dates){
       +`<td>${esc(r.label)}<span class="who">${esc(r.who||"")}</span></td>`
       +dates.map((t,k)=>cell(r.map.get(t),k,false)).join("")+`</tr>`).join("")
     +`<tr class="spread"><td>Spread<span class="who">warmest minus coolest</span></td>`
-    +stat.map(st=>`<td>${st&&st.max>st.min?(st.max-st.min).toFixed(0)+"°":"—"}</td>`).join("")+`</tr>`
+    +stat.map(st=>`<td>${st&&st.max>st.min?(st.max-st.min).toFixed(0)+deg:"—"}</td>`).join("")+`</tr>`
     +`<tr class="spread"><td>Sources<span class="who">reaching that day</span></td>`
     +stat.map(st=>`<td>${st?st.n:"—"}</td>`).join("")+`</tr>`
     +`</tbody></table></div>`
