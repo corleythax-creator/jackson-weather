@@ -421,8 +421,8 @@ const VER_DAYS=60;     // how far back to score; the window slides with today
 const VER_LEADS=7;     // previous_day1 … previous_day7 is what the archive publishes
 
 // The statewide table. A fixed list, not the searchable cities[] — these are town
-// centres to about a mile, which is far inside a model's grid cell. Kept in the order
-// they were asked for rather than sorted, because that is the order they are read in.
+// centres to about a mile, which is far inside a model's grid cell. Sorted north to
+// south at definition, so the chunking, the table and the readout all follow one order.
 const MS_CITIES=[
   {name:"Southaven",  lat:34.9890, lon:-90.0126},
   {name:"Tupelo",     lat:34.2576, lon:-88.7034},
@@ -435,7 +435,7 @@ const MS_CITIES=[
   {name:"Cleveland",  lat:33.7444, lon:-90.7250},
   {name:"Greenwood",  lat:33.5162, lon:-90.1795},
   {name:"Grenada",    lat:33.7690, lon:-89.8081},
-];
+].sort((a,b)=>b.lat-a.lat);
 const MS_DAYS=7;
 // Open-Meteo takes comma-separated coordinates and answers with one object per
 // location, so eleven cities need three requests rather than eleven. Chunked instead
@@ -449,6 +449,7 @@ let fcSource=(()=>{
 
 let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
 let msByCity=new Map(), msDays=[], msTried=false, msLoading=false, msErr=[], msSel=null;
+let msNwsDone=false, msNwsMissing=[];
 let soilOn=false, solarOn=false, activePanel="temp", gran="day";
 let mode="fc", thresh=100, selDate=null;   // the forecast comparison is the landing view
 const HOT_CHOICES=[85,90,95,100,105,110];
@@ -769,7 +770,10 @@ async function maybeLoadMs(){
     `https://api.open-meteo.com/v1/forecast?latitude=${ch.map(c=>c.lat).join(",")}`
     +`&longitude=${ch.map(c=>c.lon).join(",")}`
     +`&daily=temperature_2m_max,temperature_2m_min${units}`
-    +`&forecast_days=${MS_DAYS}&models=${ALT_MODELS}`, "ms", TTL_LIVE)));
+    +`&forecast_days=${MS_DAYS}&models=${ALT_MODELS}`, "ms", TTL_LIVE,
+    // A multi-location response is an array, so the default `j.daily` test never
+    // matched and these three calls were repeating on every single page load.
+    j=>Array.isArray(j)?j.length>0&&j.every(x=>x&&x.daily):!!(j&&j.daily))));
   res.forEach((r,ci)=>{
     if(r.status==="rejected"){ msErr.push(r.reason.message||String(r.reason)); return; }
     // One location comes back as a bare object, several as an array.
@@ -786,7 +790,50 @@ async function maybeLoadMs(){
   msByCity.forEach(m=>m.forEach((_,d)=>seen.add(d)));
   msDays=[...seen].sort().slice(0,MS_DAYS);
   msLoading=false;
+  if(mode==="ms") draw();         // the models alone are worth showing straight away
+
+  // NWS is two calls a city and cannot be batched, so it lands second and the table
+  // fills in. Four at a time rather than twenty-two at once: weather.gov is a public
+  // service and a browser only opens six connections to a host anyway.
+  const got=await pool(MS_CITIES,4,c=>nwsForecast(c.lat,c.lon).catch(()=>null));
+  MS_CITIES.forEach((c,i)=>{ if(!mergeMsNws(c.name,got[i])) msNwsMissing.push(c.name); });
+  msNwsDone=true;
   if(mode==="ms") draw();
+}
+
+// Bounded concurrency. Rejections come back as null rather than sinking the batch.
+async function pool(items,n,fn){
+  const out=new Array(items.length); let i=0;
+  await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{
+    while(i<items.length){ const k=i++;
+      try{ out[k]=await fn(items[k]); }catch(e){ out[k]=null; } }
+  }));
+  return out;
+}
+
+const prevDay=d=>{ const t=new Date(d+"T12:00:00"); t.setDate(t.getDate()-1);
+  return t.toISOString().slice(0,10); };
+// NWS pairs a daytime high with the night that *follows* it, the way a phone app
+// shows "today 95, tonight 70". Open-Meteo's temperature_2m_min for a date is the
+// minimum inside that calendar day, which is the morning low — a different quantity,
+// one day earlier. Averaging them as published would mix the two, so the night low
+// is filed against the following date, where it is the same thing the models report.
+// The high needs no such shift. See CLAUDE.md.
+function mergeMsNws(name,nws){
+  const days=msByCity.get(name);
+  if(!days||!nws||!nws.size) return false;
+  const def=FC_MODELS.find(m=>m.id==="nws");
+  let any=false;
+  days.forEach((rec,d)=>{
+    if(rec.per.some(x=>x.id==="nws")) return;      // never fold the same source twice
+    const day=nws.get(d), prev=nws.get(prevDay(d));
+    const hi=day&&day.hi!=null?day.hi:null;
+    const lo=prev&&prev.lo!=null?prev.lo:null;     // last night's low is this day's min
+    if(hi==null&&lo==null) return;
+    rec.per.push({id:"nws",label:def.label,who:def.who,hi,lo});
+    msDayStats(rec); any=true;
+  });
+  return any;
 }
 
 // One location's daily block into a Map of date → the models' spread for that day.
@@ -802,16 +849,23 @@ function absorbMs(d){
       if(hi==null&&lo==null) return;    // a model absent here is not a row of dashes
       per.push({id:m.id,label:m.label,who:m.who,hi,lo});
     });
-    const hs=per.filter(x=>x.hi!=null).map(x=>x.hi);
-    const ls=per.filter(x=>x.lo!=null).map(x=>x.lo);
-    if(!hs.length&&!ls.length) return;
-    const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
-    out.set(t,{date:t,per,
-      hi:mean(hs), lo:mean(ls), n:hs.length,
-      hSpread:hs.length?Math.max(...hs)-Math.min(...hs):null,
-      lSpread:ls.length?Math.max(...ls)-Math.min(...ls):null});
+    if(!per.length) return;
+    out.set(t,msDayStats({date:t,per}));
   });
   return out.size?out:null;
+}
+
+// Recomputed rather than accumulated, so folding a source in later cannot leave the
+// mean and the spread describing different sets.
+function msDayStats(rec){
+  const hs=rec.per.filter(x=>x.hi!=null).map(x=>x.hi);
+  const ls=rec.per.filter(x=>x.lo!=null).map(x=>x.lo);
+  const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
+  rec.hi=mean(hs); rec.lo=mean(ls);
+  rec.n=hs.length; rec.nLo=ls.length;
+  rec.hSpread=hs.length?Math.max(...hs)-Math.min(...hs):null;
+  rec.lSpread=ls.length?Math.max(...ls)-Math.min(...ls):null;
+  return rec;
 }
 
 // Lays the chosen source over the forecast days. Every source keeps its own map, so
@@ -833,10 +887,20 @@ function applySource(city){
 // show. Open-Meteo's model blend runs several degrees off it, so NWS wins where it
 // has coverage. Two calls: resolve the grid, then read the periods.
 async function nwsForecast(lat,lon){
-  const p=await grab(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`);
+  // The grid lookup is a fixed property of the coordinate, so it is kept for a month;
+  // the periods are a forecast, so half an hour. Together that takes a warm browser
+  // from two requests per city to none — which is what makes eleven cities affordable.
+  const p=await grabCached(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
+    "nwspt", TTL_STATIC, j=>!!(j&&j.properties&&j.properties.forecast),
+    j=>({properties:{forecast:j.properties.forecast}}));
   const url=p&&p.properties&&p.properties.forecast;
   if(!url) return null;
-  const f=await grab(url);
+  const f=await grabCached(url,"nwsfc",TTL_LIVE,
+    j=>!!(j&&j.properties&&j.properties.periods&&j.properties.periods.length),
+    j=>({properties:{periods:j.properties.periods.map(x=>({startTime:x.startTime,
+      isDaytime:x.isDaytime, temperature:x.temperature,
+      temperatureUnit:x.temperatureUnit,
+      probabilityOfPrecipitation:x.probabilityOfPrecipitation}))}}));
   const per=f&&f.properties&&f.properties.periods;
   if(!per||!per.length) return null;
   const out=new Map();
@@ -958,13 +1022,19 @@ function lsSet(key,d){
 // sources for half an hour, while a fresh phone showed thirteen.
 const hashStr=t=>{let h=5381;for(let i=0;i<t.length;i++)h=(h*33^t.charCodeAt(i))>>>0;return h.toString(36);};
 let usedStale=false;          // reset per city load, reported in the footer
-async function grabCached(url,tag,ttl){
+// `ok` decides whether a response is worth storing — the default is the Open-Meteo
+// shape, since a 200 carrying {error:true} has no daily/hourly block. `keep` trims a
+// response before it is stored *and* returned, so a caller that reads four fields out
+// of a 25 KB document does not put the other 24 KB in everyone's localStorage.
+async function grabCached(url,tag,ttl,ok,keep){
   const key=`jw:${tag}:${hashStr(url)}`;
   const hit=lsGet(key,ttl); if(hit) return hit;
   try{
     const j=await grab(url);
-    if(j&&(j.daily||j.hourly)) lsSet(key,j);
-    return j;
+    const good=ok?ok(j):!!(j&&(j.daily||j.hourly));
+    const out=(good&&keep)?keep(j):j;
+    if(good) lsSet(key,out);
+    return out;
   }catch(e){
     // Stale beats nothing. A rate limit should not blank a dashboard that has an
     // older copy sitting in storage; it is served and the footer says so.
@@ -1647,13 +1717,22 @@ function drawMs(){
     const sp=rows.map(c=>msByCity.get(c.name).get(d)).filter(r=>r&&r.hSpread!=null)
       .reduce((x,r)=>Math.max(x,r.hSpread),0);
     return Math.max(a,sp); },0);
-  const models=rows.reduce((a,c)=>{
-    const r=msByCity.get(c.name).get(msDays[0]); return Math.max(a,r?r.n:0); },0);
+  // NWS reaches about seven days and not every city's first day, so the number of
+  // sources behind a cell is not constant — it is reported as a range rather than
+  // letting an average over thirteen pass as one over fourteen.
+  let nMin=Infinity,nMax=0;
+  rows.forEach(c=>msDays.forEach(d=>{
+    const r=msByCity.get(c.name).get(d); if(!r||!r.n) return;
+    nMin=Math.min(nMin,r.n); nMax=Math.max(nMax,r.n); }));
+  if(!isFinite(nMin)) nMin=nMax;
+  const srcs=nMin===nMax?`<b>${nMax}</b>`:`<b>${nMin}&ndash;${nMax}</b>`;
   const missing=MS_CITIES.filter(c=>!msByCity.has(c.name));
 
   box.innerHTML=`<h2>Mississippi, next ${msDays.length} days &mdash; °F</h2>`
     +`<p class="lede">Daily high with the overnight low beneath it, each one the `
-    +`<b>average of ${models} forecast models</b> for that city and day. Shaded by where `
+    +`average of the ${srcs} forecast sources covering that city and day &mdash; `
+    +`the 13 models Open-Meteo carries, plus <b>NWS</b>`
+    +(msNwsDone?``:` (still loading)`)+`. Cities run north to south. Shaded by where `
     +`the city falls among the others <em>that day</em> — `
     +`<b style="color:#3B8AC4">blue</b> the coolest, `
     +`<b style="color:#C2542B">red</b> the warmest. `
@@ -1666,13 +1745,21 @@ function drawMs(){
           +msDays.map((d,k)=>cell(m.get(d),k,c.name,d)).join("")+`</tr>`;
       }).join("")
     +`</tbody></table></div>`
-    +`<p class="foot">Every city is the mean of the same ${models} models, so the `
-    +`comparison between two cities is like for like. On the worst day they disagree `
-    +`by <b>${worst.toFixed(0)}°F</b> among themselves — the breakdown shows by how `
-    +`much for any single figure. <b>NWS is not in the average</b>: it takes two `
-    +`requests per city, which is ${MS_CITIES.length*2} calls this table does not `
-    +`spend. The whole grid is ${Math.ceil(MS_CITIES.length/MS_CHUNK)} requests, `
-    +`cached for half an hour.`
+    +`<p class="foot">Every city draws on the same sources, so the comparison between `
+    +`two of them is like for like. On the worst day they disagree by `
+    +`<b>${worst.toFixed(0)}°F</b> among themselves — the breakdown shows by how much `
+    +`for any single figure. <b>NWS pairs a daytime high with the night that follows `
+    +`it</b>, while the models report the minimum inside a calendar day — the morning `
+    +`low, a different figure one day earlier. So NWS's night low is counted against `
+    +`the next day here, where it means the same thing as theirs; that is also why the `
+    +`first column's low has one fewer source behind it. `
+    +`The models are ${Math.ceil(MS_CITIES.length/MS_CHUNK)} requests and NWS up to `
+    +`${MS_CITIES.length*2} more, though its grid lookups are kept for a month and its `
+    +`forecasts half an hour, so a second visit costs nothing.`
+    +(msNwsMissing.length&&msNwsDone
+      ? ` NWS didn't answer for ${msNwsMissing.map(esc).join(", ")}, which `
+        +`${msNwsMissing.length===1?"is":"are"} averaged without it.`
+      : ``)
     +(missing.length
       ? ` <b>${missing.length}</b> cit${missing.length===1?"y is":"ies are"} missing — `
         +`${missing.map(c=>esc(c.name)).join(", ")} — because a slice didn't answer: `
@@ -1685,9 +1772,9 @@ function drawMs(){
   });
   markMsSel();
 
-  $("stand").innerHTML=`<b>${rows.length}</b> Mississippi cities, the next `
-    +`<b>${msDays.length}</b> days, each figure the average of <b>${models}</b> `
-    +`forecast models. Tap a temperature to see what each model actually said.`
+  $("stand").innerHTML=`<b>${rows.length}</b> Mississippi cities north to south, the `
+    +`next <b>${msDays.length}</b> days, each figure the average of ${srcs} forecast `
+    +`sources including <b>NWS</b>. Tap a temperature to see what each one said.`;
   $("hint2").textContent="Read down a column to find the warmest city that day, "
     +"across a row to see one city's week.";
   $("readout").innerHTML=`<span class="stat">Average daily high and overnight low. `
@@ -1708,7 +1795,7 @@ function openMsFly(name,date,el){
     +`<div class="hd"><div><h3>${esc(name)}</h3>`
     +`<p class="who">${WDAYS[d.getDay()]} ${+date.slice(8)} `
     +`${MONTHS_FULL[+date.slice(5,7)-1]}</p></div>`
-    +`<div class="rank">Average of<b>${rec.n}</b>models</div></div>`
+    +`<div class="rank">Average of<b>${rec.n}</b>sources</div></div>`
     +`<table class="msbd"><thead><tr><th>Model</th><th>High</th><th>Low</th></tr></thead>`
     +`<tbody><tr class="avg"><td>Average</td>`
     +`<td>${rec.hi==null?"&mdash;":rec.hi.toFixed(1)+"°"}</td>`
@@ -1719,10 +1806,11 @@ function openMsFly(name,date,el){
     +`<p class="foot">The models spread `
     +`<b>${rec.hSpread==null?"—":rec.hSpread.toFixed(0)+"°"}</b> on the high and `
     +`<b>${rec.lSpread==null?"—":rec.lSpread.toFixed(0)+"°"}</b> on the low here. `
-    +(rec.n<FC_MODELS.length-1
-      ? `The average is over the <b>${rec.n}</b> models that reach this day, not all `
-        +`${FC_MODELS.length-1}.`
-      : `Every one of the ${rec.n} models reaches this day.`)+`</p>`;
+    +(rec.n<FC_MODELS.length
+      ? `The high is over the <b>${rec.n}</b> sources that reach this day, not all `
+        +`${FC_MODELS.length}.`
+      : `Every one of the ${rec.n} sources reaches this day.`)
+    +(rec.nLo!==rec.n?` The low is over <b>${rec.nLo}</b>.`:``)+`</p>`;
   fly.hidden=false;
   fly.querySelector(".x").onclick=closeMsFly;
   const fig=$("fig"), fr=fig.getBoundingClientRect(), er=el.getBoundingClientRect();

@@ -37,9 +37,10 @@ All keyless. All free tier.
 |---|---|---|
 | Observations | `archive-api.open-meteo.com/v1/archive` | ERA5 reanalysis, ~5-day lag |
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
-| **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving |
+| **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving. Both cached — the grid lookup for a month, the periods for half an hour |
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
 | **Statewide table** | `api.open-meteo.com/v1/forecast`, comma-separated coordinates | 11 cities × 13 models in 3 requests; one object per location, on demand |
+| Statewide NWS | `api.weather.gov` | 2 calls per city, 4 at a time; folded into the same average |
 | **Forecast verification** | `previous-runs-api.open-meteo.com/v1/forecast` | `temperature_2m_max_previous_day1…7` for all 13 models; one call, on demand |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
@@ -60,12 +61,12 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   low shaded blue-to-red by where it falls among the sources that day, then spread and
   source-count rows. The point is to find the row matching whatever forecast you trust
   and pick it.
-- **Mississippi tab** — a fixed list of 11 cities (Southaven, Tupelo, Columbus,
-  Meridian, Natchez, Jackson, Greenville, Clarksdale, Cleveland, Greenwood, Grenada)
-  against the next 7 days. Each cell is the mean of the 13 Open-Meteo models for that
-  city and day, high over low, shaded by where the city falls among the others that
-  day. Tapping a figure opens the model-by-model breakdown behind it, anchored to the
-  cell. No chart on this tab.
+- **Mississippi tab** — a fixed list of 11 cities (Southaven, Tupelo, Clarksdale,
+  Grenada, Cleveland, Greenwood, Columbus, Greenville, Meridian, Jackson, Natchez,
+  ordered north to south) against the next 7 days. Each cell is the mean of the 13
+  Open-Meteo models *and NWS* for that city and day, high over low, shaded by where
+  the city falls among the others that day. Tapping a figure opens the
+  source-by-source breakdown behind it, anchored to the cell. No chart on this tab.
 - **Verification tab** — how far each model's *published* forecast landed from what
   the archive later recorded, by lead time. A chart of average miss against days of
   warning (band, thin lines, bold average and bold best), and a table of every model
@@ -196,16 +197,36 @@ Changing these without understanding why breaks correctness, not just appearance
   beats none. A single-location response comes back as a bare object rather than an
   array, so `maybeLoadMs()` normalises with `Array.isArray(...) ? ... : [...]`; a
   final chunk of one would otherwise parse as nothing.
-- **The statewide list is fixed, and kept in the order it was asked for.** It is not
+- **The statewide list is fixed, and sorted north to south at definition.** It is not
   `cities[]` — searching, removing and the 5-city limit do not apply, and the tab
   renders with no city loaded at all, which is why its dispatch sits *before* the
   `if(!cities.length) return` in `draw()`. The coordinates are town centres to about
-  a mile, far inside any model's grid cell. Alphabetising them would be a change to
-  what was asked for, not a tidy-up.
-- **NWS is not in the statewide average.** It is two calls per city — 22 more
-  requests — which is exactly the budget this table was designed around. The footnote
-  says so and gives the number, so the omission reads as a decision rather than a
-  gap.
+  a mile, far inside any model's grid cell. The `.sort()` is on the constant rather
+  than at render time, so the chunking, the table and the breakdown all agree on one
+  order.
+- **NWS is in the statewide average, and it is the expensive part.** Three requests
+  fetch 13 models for 11 cities; NWS is two calls per city on top, because it takes
+  one point at a time. They go four at a time through `pool()` rather than
+  twenty-two at once, and they land *after* the table has already drawn from the
+  models, so the tab is useful immediately and fills in. What makes it affordable is
+  that `nwsForecast()` now caches: the grid lookup is a fixed property of a
+  coordinate so it keeps for a month, the periods for half an hour. A warm reload
+  makes **zero** requests to either host.
+- **NWS's night low is filed against the next day.** NWS pairs a daytime high with
+  the night that *follows* it — "today 95, tonight 70" — while `temperature_2m_min`
+  is the minimum inside a calendar day, which is the *morning* low, the same air mass
+  one day later. Averaging them as published would put two different quantities in
+  one mean. `mergeMsNws()` therefore takes the low from `prevDay(d)` and the high
+  from `d`. The visible consequence is that the first column's low has one fewer
+  source behind it, which the footnote explains rather than hiding. The high needs no
+  shift. Note this is *not* what `applyNws()` does on the Timeline, and deliberately
+  so: there a single source is being displayed in its own convention, which is what a
+  phone app shows; here sources are being averaged against each other.
+- **A cell's source count is not constant, so the copy gives a range.** NWS reaches
+  about seven days and never the first column's low, so `drawMs()` computes `nMin`
+  and `nMax` across every cell and prints `13–14` rather than letting an average over
+  thirteen pass as one over fourteen. The breakdown card names the exact count, and
+  the low's count too when it differs.
 - **Missing cities are named, and counted as cities.** A failed slice produces one
   error message covering four cities; reporting `msErr.length` said "1 did not load"
   when four were gone. The footnote is built from
@@ -243,6 +264,12 @@ Changing these without understanding why breaks correctness, not just appearance
   band, the average and the bold lines all use it; the table still lists everything,
   with a **Models** row giving the count per lead. If fewer than two models are
   complete it falls back to all of them rather than drawing nothing.
+- **`grabCached()` takes an optional `ok` and `keep`.** `ok` decides whether a
+  response is worth storing — the default is the Open-Meteo shape, and anything that
+  is not that shape must say so or it silently never caches. `keep` trims a response
+  before it is stored *and* returned, which is how eleven NWS forecasts fit in ~28 KB
+  instead of ~250: the app reads five fields per period and `detailedForecast` is not
+  one of them. A caller using `keep` must not read fields it did not keep.
 - **`TTL_VER` is twelve hours because the verification window slides.** The request
   says `past_days=VER_DAYS`, so the same URL means something different tomorrow —
   `TTL_STATIC` would freeze a month-old window in place. Twelve hours keeps repeat
@@ -400,6 +427,13 @@ Changing these without understanding why breaks correctness, not just appearance
   position, so any zoom, aggregation, year or tab change would leave it pointing at
   the wrong day. It lives in `#fig` and never inside `#readout`, so the rule below
   still holds both ways.
+- **A multi-location response is an array, and the default cache test missed it.**
+  `grabCached()`'s default `ok` looks for `j.daily`, which an array never has, so the
+  statewide tab's three calls were refetched on *every page load* — quietly breaking
+  the "a warm reload makes zero Open-Meteo requests" rule for weeks' worth of visits.
+  It now passes its own `ok`. Anything that requests a shape other than a single
+  `{daily}`/`{hourly}` object has to do the same; check a cold load against a reload
+  when adding one, because nothing else surfaces it.
 - **`.key` needed `[hidden]` spelled out too.** `.key{display:flex}` is the same trap
   `.grp` fell into: the statewide tab hides the key, and without `.key[hidden]
   {display:none}` an empty flex row kept its margins. That is now two elements caught
