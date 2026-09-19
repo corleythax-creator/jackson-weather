@@ -303,7 +303,8 @@ Changing these without understanding why breaks correctness, not just appearance
   rather than an interstate, so it draws in the thinner US-highway style.
 - **`MS_PLACES` are markers with no forecast behind them.** Bruce, Amory, Houston,
   Eupora, Starkville, Belzoni, Louisville, Macon, Rolling Fork, Yazoo City,
-  Vicksburg, Raleigh, Bude and Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
+  West Point, Vicksburg, Raleigh, De Kalb, Bude and Lucedale are there for
+  orientation only: a smaller, dimmer dot and a smaller name,
   deliberately unlike a station so a reader cannot mistake one for a station whose
   number failed to load. They are not in `MS_CITIES`, so they cost no requests and
   never reach the table, the ranking or the breakdown, and nothing about them is
@@ -376,7 +377,11 @@ Changing these without understanding why breaks correctness, not just appearance
 - **A shield may carry `dx`/`dy` and `sm`.** The nudge shifts the *candidate* before
   the collision test, not the badge afterwards, so a hand-placed label still cannot
   overlap anything — US 61 uses `dy:-11`. `sm` is for a route named rather than
-  numbered: "Natchez Trace" at full badge size is a banner, so it drops to 6px.
+  numbered: "Natchez Trace" at full badge size is a banner, so it drops to 6px. The
+  Trace also carries `dy:-18`, and needs it: it is the longest route and it runs
+  diagonally through the busiest part of the map, so once sixteen place names were
+  down nothing on its own line was clear and its badge was dropped entirely. More
+  anchor points did not recover it — lifting the badge off the route did.
 - **Road geometry is checked against the outline, not against the eye.** Every road
   vertex *and* 50 sampled points along every segment are tested point-in-polygon
   against `MS_OUTLINE` — 3,610 points in total, all of which must fall inside. The
@@ -404,8 +409,8 @@ Changing these without understanding why breaks correctness, not just appearance
   county borders bury the eleven markers that the page is actually about.
 - **Shields yield to everything and are dropped rather than squeezed.** Roads are
   context, not data, so the badges are placed only after the markers and the city
-  names, against the same collision test, trying every interior vertex and every
-  midpoint along the route. A route whose badge finds no clear spot keeps its line
+  names, against the same collision test, trying every interior vertex and the
+  quarter, half and three-quarter points of every segment. A route whose badge finds no clear spot keeps its line
   and loses its label — which is what happens to US 82 on a phone. The lines
   themselves are drawn under the markers and are deliberately dim; if they ever start
   competing with the temperature ramp for attention, they are wrong.
