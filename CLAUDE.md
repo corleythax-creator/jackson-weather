@@ -39,6 +39,7 @@ All keyless. All free tier.
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving |
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
+| **Forecast verification** | `previous-runs-api.open-meteo.com/v1/forecast` | `temperature_2m_max_previous_day1…7` for all 13 models; one call, on demand |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
 | Day history + records | archive, 1940–last complete year | max, min and precipitation, in 20-year slices; fetched on first tap, on the Hot days tab, or on week/month aggregation, then cached in `localStorage` (~380 KB) so it is pulled once per browser rather than once per load |
@@ -52,11 +53,17 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 
 - **Forecast tab (the landing view)** — every forecast source's daily high, day by day.
   The chart's headline line is the **average of all sources**, with the full spread as
-  a band, every model a thin line and the chosen source drawn alongside in green; a
+  a band, every model a thin line and the chosen source drawn alongside in green; the
+  overnight low gets the same treatment in blue beneath it. A
   table beneath with an **average** row on top, every source's high and
   low shaded blue-to-red by where it falls among the sources that day, then spread and
   source-count rows. The point is to find the row matching whatever forecast you trust
   and pick it.
+- **Verification tab** — how far each model's *published* forecast landed from what
+  the archive later recorded, by lead time. A chart of average miss against days of
+  warning (band, thin lines, bold average and bold best), and a table of every model
+  × lead 1–7 with the average miss above its signed bias, shaded per column. NWS is
+  absent: nothing archives what it said last week.
 - **Timeline tab** — temperature (high/low/mean + 25-year normal band), rainfall,
   and two optional panels: soil moisture percentile and solar/UV.
 - **Day condition symbols** — one glyph per day in a row above the panels, from the
@@ -98,12 +105,13 @@ One `<script>`, no modules. In order:
 4. **Derived series** — normals (`buildClim`), soil percentile (`buildSoil`),
    antecedent precipitation index (`buildApi` / `fitApi`).
 5. **Render** — `draw()` for the timeline, `drawHot()` for the Hot days tab,
+   `drawFc()` for the forecast comparison, `drawVer()` for verification,
    `renderReadout(i, select)` for the figures above the chart.
 6. **Interaction** — one IIFE at the bottom wires mouse, touch, and all controls.
 
 ### State
 
-`year`, `mode` (`chart` | `hot`), `gran` (`day` | `week` | `month`), `thresh`,
+`year`, `mode` (`fc` | `chart` | `hot` | `ver`), `gran` (`day` | `week` | `month`), `thresh`,
 `view` (a date-index range), `selDate`, `activePanel` (mobile), `soilOn`, `solarOn`,
 `cities[]`.
 
@@ -171,9 +179,55 @@ Changing these without understanding why breaks correctness, not just appearance
   a model whose arrays are all null, and `fcRows()` only lists maps with entries, so a
   model with no coverage is absent rather than a row of dashes. Verified by stubbing
   two models to null and watching 14 sources become 12.
+- **Verification scores what a model *said*, not what it now says.** This is the
+  whole reason it uses `previous-runs-api` rather than the ordinary archive.
+  `temperature_2m_max_previous_day3` is the high a model published three days before
+  the date it applies to; asking the archive for that model's current numbers on a
+  past day would grade its *analysis*, which is a different and far easier test and
+  would flatter every model. The endpoint goes back to January 2024 for most models,
+  which is ample for the rolling `VER_DAYS` window.
+- **Truth is the archive day already on hand, so verification costs one request.**
+  `verScore()` reads `city.byDate` and accepts a day only when `src === "archive"`
+  and `!r.fc` — a forecast day, or one inside the ERA5 lag window, has nothing
+  measured to grade against. That keeps the tab to a single lazy call. The cost is
+  that ERA5 is the yardstick: a reanalysis on a ~31 km cell, not a thermometer in
+  Brandon, and a model tuned to the same reanalysis gets a small edge. Both caveats
+  are printed under the table, because the number is meaningless without them.
+- **NWS is not in the verification table and must not be faked into it.** Nobody
+  publishes an archive of past NWS forecasts, so it cannot be scored the way the
+  models are. Grading its *current* seven-day output against future observations
+  would take a week per data point. The table says so rather than leaving a gap.
+- **The verification chart plots only the models covering every lead.** A mean over
+  a shrinking set *falls* when a short-coverage model drops out, which on an error
+  chart reads as the forecasts improving with less warning — the exact opposite of
+  the truth. So `plot` is `sc.rows.filter(r => r.leads.every(Boolean))`, and the
+  band, the average and the bold lines all use it; the table still lists everything,
+  with a **Models** row giving the count per lead. If fewer than two models are
+  complete it falls back to all of them rather than drawing nothing.
+- **`TTL_VER` is twelve hours because the verification window slides.** The request
+  says `past_days=VER_DAYS`, so the same URL means something different tomorrow —
+  `TTL_STATIC` would freeze a month-old window in place. Twelve hours keeps repeat
+  visits free without that.
+- **Lower is better, so the cool end of the ramp is the accurate end.** The
+  verification table reuses `TEMP_STOPS` and the per-column ranking from the
+  forecast table rather than gaining a second palette; blue reads as good because
+  the number is a distance from the truth, not a temperature.
+- **The verification y axis starts at zero.** Error is a magnitude; a floating
+  baseline would make a one-degree gap between two models look like a chasm.
+- **The Forecast chart draws the low as a second plume, not a second chart.** Same
+  band / thin lines / bold average, in `--cold`, sharing one y range. The low's
+  labelled circle is dropped on any day where it would collide with the high's —
+  the same `spacing >= 2 * radius` rule the rest of the app uses, applied
+  vertically. High and low are pooled separately in `agg()`, because a source can
+  cover one and not the other.
+- **Year and forecast source sit above the chart.** They decide what is drawn, so
+  they belong before it; the rest of the controls (aggregation, zoom, panels) act on
+  what is already there and stay beneath. `.controls.topctl` is the top row.
 - **The Forecast tab does not load the normals.** It is the landing view and the
   normals are a 30-year pull it never reads, so `maybeLoadClim()` is deferred until a
-  tab that needs it. A cold landing is three Open-Meteo calls, not four.
+  tab that needs it. A cold landing is three Open-Meteo calls, not four. Verification
+  does not read them either, so the gate is `mode === "chart" || mode === "hot"` —
+  not `mode !== "fc"`, which would have quietly pulled them on the new tab.
 - **Every Open-Meteo response goes through `grabCached()`.** Reloading used to refetch
   everything, which exhausted the free tier and left the app unable to load *at all* —
   the archive call 429s, `byDate` comes back empty, the city is dropped and no chart
@@ -307,6 +361,13 @@ Changing these without understanding why breaks correctness, not just appearance
   position, so any zoom, aggregation, year or tab change would leave it pointing at
   the wrong day. It lives in `#fig` and never inside `#readout`, so the rule below
   still holds both ways.
+- **Verification needs the current year.** The window is the last `VER_DAYS` days,
+  but the truth comes from `city.byDate`, which only holds the viewed year. On a past
+  year there is no overlap, so `drawVer()` says so and stops rather than scoring
+  against nothing.
+- **The previous-runs response has the same HTTP-200 blind spot.** `maybeLoadVer()`
+  checks for `daily.time` and keeps `reason` for the message, exactly as
+  `maybeLoadHist()` does.
 - **UV and rain chance are current-year only.** They come from the forecast feed, which
   reaches ~14 days back. Past years get solar but no UV; the renderer skips null days
   rather than faking them.
