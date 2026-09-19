@@ -256,6 +256,13 @@ Changing these without understanding why breaks correctness, not just appearance
   brought that to 347px and 383px, about 28% off each. The scratch harness prints
   the top edge of every landmark, so the next trim can be aimed at whatever is
   actually costing the most rather than guessed at.
+- **The Mississippi standfirst is written to fit one line.** It is the tab's
+  headline and it sits above the fold on every visit, so the sentence is kept short
+  enough to stay on one line at desktop width rather than being allowed to wrap. On a
+  phone it takes two, which is the floor for that much information at 390px.
+- **The search box keeps a 16px font however small it gets.** Padding and max-width
+  are fair game; the font size is not. Below 16px, iOS zooms the whole page when the
+  field takes focus, and the user has to pinch back out.
 - **Five tabs fit one row at 390px, and that drove the tab metrics.** They need 356px
   of the 362px a 390px phone offers, at 13.5px with a 6px margin. Anything narrower
   wraps to two rows, which is the intended graceful failure — do not shorten the
@@ -264,27 +271,43 @@ Changing these without understanding why breaks correctness, not just appearance
   be.** Adding the overnight low widened the Forecast y range from about 10° to 40°,
   so most of the panel is empty air between the two plumes; the height came down to
   match rather than paying full price for the gap.
-- **The map is hand-drawn SVG, like every other chart here.** A tile layer or a
-  GeoJSON fetch would mean a dependency, a key or a request, and the single-file rule
-  forbids all three. `MS_OUTLINE` is a 42-point boundary traced by hand at roughly
-  county resolution: the 35th parallel, the Alabama line, the coast and the Pearl
-  River, the 31st parallel, then the Mississippi River back up with its meanders
-  smoothed away. It is a frame, not a survey — the key says "outline simplified; city
-  positions exact", because the city coordinates *are* exact and the outline is the
-  one drawn thing on the page that is an approximation. Do not let it acquire an
-  authority it has not earned by dropping that caption. `MS_ROADS` carries ten major
-  routes on the same terms — I-55, I-20, I-59, I-10, I-22, US 61, 45, 49, 82 and 84 —
-  as simplified centrelines, which is why the caption reads "outline *and routes*
-  simplified".
+- **The state line and the county lines are real, and they come out of one source.**
+  `MS_OUTLINE` (127 points) and `MS_COUNTIES` (202 polylines, 549 points) are both
+  derived from the US Census county polygons, at build time, by a topological split:
+  an edge exactly two counties share is an interior border, an edge only one county
+  has is on the state line. Because both fall out of the same vertex set they can
+  never disagree, and a shared border is drawn once rather than twice. Decimated with
+  Douglas-Peucker at ~0.01° and rounded to 3dp — about 100m, far inside a forecast
+  model's grid cell — which costs ~11.5 KB of source. They replaced a 42-point
+  outline I had traced by hand; the real one is better in every way and the caption
+  now credits it rather than apologising for it. To regenerate: fetch a US counties
+  GeoJSON, keep the features whose FIPS id starts with `28`, count every rounded
+  edge, chain the count-2 edges into the mesh and the count-1 edges into the ring,
+  then simplify. There is no runtime fetch and no dependency — the single-file rule
+  still holds, the data is just baked in.
+- **`MS_ROADS` is still approximate, and the caption says so.** Ten major routes —
+  I-55, I-20, I-59, I-10, I-22, US 61, 45, 49, 82 and 84 — as hand-traced centrelines,
+  good enough to place a city against a road and not to navigate by. Each end is
+  extended along its own heading until it meets the real border, so no route dangles
+  short of the state line. **I-59's last vertex is exempt**: it merges with I-20 at
+  Meridian and the two run concurrently into Alabama, so that end is a junction, not
+  a crossing — extending it threw the line 0.66° off before that exception existed.
 - **Road geometry is checked against the outline, not against the eye.** Every road
   vertex *and* 50 sampled points along every segment are tested point-in-polygon
   against `MS_OUTLINE` — 3,610 points in total, all of which must fall inside. The
   vertex check alone is not enough: a straight hop between two interior points can
   still cut a corner off a concave boundary, which is exactly how I-59's crossing of
-  the Pearl River was caught running over open water. Re-run it after touching either
-  array. Watch the sign when nudging an endpoint: longitudes here are negative, so
-  *east* is the larger number, and "move it inside" on the Alabama line means more
-  negative, not less.
+  the Pearl River was caught running over open water, and how I-10 was caught cutting
+  across the Bay of St. Louis once the real coastline replaced the straight one.
+  Re-run it after touching either array — swapping in the Census outline alone put
+  three routes outside. Watch the sign when nudging an endpoint: longitudes here are
+  negative, so *east* is the larger number, and "move it inside" on the Alabama line
+  means more negative, not less.
+- **County lines are the faintest thing on the page, and one element.** All 202 of
+  them are a single `<path>` rather than 202 polylines: the same picture, a fraction
+  of the DOM, and nothing about them needs to be addressable. They are stroked at
+  `rgba(190,214,220,.085)` — texture, not information. Anything more assertive and 82
+  county borders bury the eleven markers that the page is actually about.
 - **Shields yield to everything and are dropped rather than squeezed.** Roads are
   context, not data, so the badges are placed only after the markers and the city
   names, against the same collision test, trying every interior vertex and every
