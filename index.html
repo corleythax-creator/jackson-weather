@@ -119,7 +119,9 @@
   select option{background:#1C2A34;color:#E6EDEC}
   select option:checked{background:#2E3E48}
 
-  .tabs{display:flex;gap:6px;margin:0 0 16px;border-bottom:1px solid var(--rule)}
+  /* Five tabs do not fit a phone on one line, so they wrap rather than overflow. */
+  .tabs{display:flex;flex-wrap:wrap;gap:0 6px;margin:0 0 16px;
+    border-bottom:1px solid var(--rule)}
   .tabs button{
     border:none;border-bottom:2px solid transparent;border-radius:0;
     padding:8px 2px;margin-right:18px;color:var(--ink-soft);background:none;
@@ -135,6 +137,7 @@
   .panelpick button{flex:none}
 
   .key{display:flex;flex-wrap:wrap;gap:14px 20px;font-size:13px;color:var(--ink-soft);margin:18px 0 4px}
+  .key[hidden]{display:none}
   .key i{display:inline-block;width:15px;height:2px;vertical-align:middle;margin-right:7px}
   .key i.swatch{height:11px;background:var(--normal);border-top:1px dashed var(--normal-edge);border-bottom:1px dashed var(--normal-edge)}
   .key i.block{height:11px;background:var(--rain)}
@@ -190,6 +193,21 @@
   .stats th:first-child,.stats td:first-child{text-align:left;color:var(--ink-soft);min-width:180px}
   .stats thead th{color:var(--ink-soft);font-weight:400;border-bottom:1px solid var(--rule)}
   .stats td .cell{display:block;padding:2px 5px;border-radius:2px}
+  /* A tappable figure still has to read as one of the table's cells. */
+  .stats td button.cell{width:100%;border:none;border-radius:2px;font:inherit;
+    color:inherit;text-align:right;cursor:pointer;padding:2px 5px}
+  .stats td button.cell:hover{border:none;outline:1px solid var(--ink-soft)}
+  .stats td button.cell.sel{outline:2px solid var(--ink)}
+  .msfly .msbd{border-collapse:collapse;width:100%;font-size:13px;
+    font-variant-numeric:tabular-nums}
+  .msfly .msbd th{color:var(--ink-soft);font-weight:400;text-align:right;
+    padding:0 0 3px;border-bottom:1px solid var(--rule)}
+  .msfly .msbd th:first-child{text-align:left}
+  .msfly .msbd td{text-align:right;padding:2px 0}
+  .msfly .msbd td:first-child{text-align:left;color:var(--ink-soft)}
+  .msfly .msbd tr.avg td{color:var(--ink);font-weight:600;padding-bottom:5px;
+    border-bottom:1px solid var(--rule)}
+  .msfly .msbd tr.active td{color:var(--today)}
   .stats td.best .cell{outline:1px solid var(--ink-soft)}
   .stats .foot{color:var(--ink-soft);margin:12px 0 0;max-width:70ch;font-size:13px}
   .fcthin{fill:none;stroke:var(--ink-soft);stroke-width:1;opacity:.45;stroke-linejoin:round}
@@ -251,6 +269,7 @@
   <figure id="fig" hidden>
     <div class="tabs" id="tabs" role="tablist">
       <button data-mode="fc" aria-pressed="true">Forecast</button>
+      <button data-mode="ms" aria-pressed="false">Mississippi</button>
       <button data-mode="chart" aria-pressed="false">Timeline</button>
       <button data-mode="hot" aria-pressed="false">Hot days</button>
       <button data-mode="ver" aria-pressed="false">Verification</button>
@@ -263,6 +282,7 @@
     <div class="readout" id="readout"><span class="stat">Hover or touch the chart to read a period.</span></div>
     <svg id="chart" viewBox="0 0 1000 512" role="img" aria-labelledby="head"></svg>
     <div class="flyout" id="flyout" hidden></div>
+    <div class="flyout msfly" id="msfly" hidden></div>
     <div class="key" id="key"></div>
     <div class="stats" id="fcsrc" hidden></div>
     <div class="controls">
@@ -323,6 +343,7 @@ function ramp(pct,stops){
 const DECAYS=[0.80,0.85,0.90,0.93,0.95,0.97];
 const PALETTE=["#E8713C","#5FAAD2","#7FC29B","#D9A441","#C77DBA"];
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const WDAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MONTHS_FULL=["January","February","March","April","May","June","July","August",
                    "September","October","November","December"];
 const wetWord=p=>p<10?"very dry":p<30?"dry":p<70?"normal":p<90?"wet":"saturated";
@@ -398,12 +419,36 @@ const FC_SRC_KEY="jw:fcsrc";
 const verBase="https://previous-runs-api.open-meteo.com/v1/forecast";
 const VER_DAYS=60;     // how far back to score; the window slides with today
 const VER_LEADS=7;     // previous_day1 … previous_day7 is what the archive publishes
+
+// The statewide table. A fixed list, not the searchable cities[] — these are town
+// centres to about a mile, which is far inside a model's grid cell. Kept in the order
+// they were asked for rather than sorted, because that is the order they are read in.
+const MS_CITIES=[
+  {name:"Southaven",  lat:34.9890, lon:-90.0126},
+  {name:"Tupelo",     lat:34.2576, lon:-88.7034},
+  {name:"Columbus",   lat:33.4957, lon:-88.4273},
+  {name:"Meridian",   lat:32.3643, lon:-88.7037},
+  {name:"Natchez",    lat:31.5604, lon:-91.4032},
+  {name:"Jackson",    lat:32.2988, lon:-90.1848},
+  {name:"Greenville", lat:33.4101, lon:-91.0618},
+  {name:"Clarksdale", lat:34.2001, lon:-90.5712},
+  {name:"Cleveland",  lat:33.7444, lon:-90.7250},
+  {name:"Greenwood",  lat:33.5162, lon:-90.1795},
+  {name:"Grenada",    lat:33.7690, lon:-89.8081},
+];
+const MS_DAYS=7;
+// Open-Meteo takes comma-separated coordinates and answers with one object per
+// location, so eleven cities need three requests rather than eleven. Chunked instead
+// of sent as one because a slice that fails costs four cities, not all of them — the
+// same reasoning as HIST_CHUNK.
+const MS_CHUNK=4;
 let fcSource=(()=>{
   try{ const v=localStorage.getItem(FC_SRC_KEY);
        return FC_MODELS.some(m=>m.id===v)?v:"nws"; }catch(e){ return "nws"; }
 })();
 
 let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
+let msByCity=new Map(), msDays=[], msTried=false, msLoading=false, msErr=[], msSel=null;
 let soilOn=false, solarOn=false, activePanel="temp", gran="day";
 let mode="fc", thresh=100, selDate=null;   // the forecast comparison is the landing view
 const HOT_CHOICES=[85,90,95,100,105,110];
@@ -710,6 +755,63 @@ function verScore(city){
   rows.sort((x,y)=>x.all.mae-y.all.mae);
   const days=[...truth.keys()].sort();
   return {rows,days:days.length,from:days[0],to:days[days.length-1]};
+}
+
+// Three requests for eleven cities, settled independently so a rate-limited slice
+// costs four cities rather than the whole table. Lazy: nothing is fetched until the
+// tab is opened. See CLAUDE.md on the request budget.
+async function maybeLoadMs(){
+  if(msTried) return;
+  msTried=true; msLoading=true; msErr=[];
+  const chunks=[];
+  for(let i=0;i<MS_CITIES.length;i+=MS_CHUNK) chunks.push(MS_CITIES.slice(i,i+MS_CHUNK));
+  const res=await Promise.allSettled(chunks.map(ch=>grabCached(
+    `https://api.open-meteo.com/v1/forecast?latitude=${ch.map(c=>c.lat).join(",")}`
+    +`&longitude=${ch.map(c=>c.lon).join(",")}`
+    +`&daily=temperature_2m_max,temperature_2m_min${units}`
+    +`&forecast_days=${MS_DAYS}&models=${ALT_MODELS}`, "ms", TTL_LIVE)));
+  res.forEach((r,ci)=>{
+    if(r.status==="rejected"){ msErr.push(r.reason.message||String(r.reason)); return; }
+    // One location comes back as a bare object, several as an array.
+    const list=Array.isArray(r.value)?r.value:[r.value];
+    chunks[ci].forEach((city,k)=>{
+      const days=absorbMs(list[k]&&list[k].daily);
+      if(days) msByCity.set(city.name,days);
+      else msErr.push(`no data for ${city.name}`);
+    });
+  });
+  // The columns are whatever dates actually arrived, so a short response never
+  // leaves a header with nothing under it.
+  const seen=new Set();
+  msByCity.forEach(m=>m.forEach((_,d)=>seen.add(d)));
+  msDays=[...seen].sort().slice(0,MS_DAYS);
+  msLoading=false;
+  if(mode==="ms") draw();
+}
+
+// One location's daily block into a Map of date → the models' spread for that day.
+function absorbMs(d){
+  if(!d||!d.time) return null;
+  const out=new Map();
+  d.time.forEach((t,i)=>{
+    const per=[];
+    FC_MODELS.forEach(m=>{
+      if(m.id==="nws") return;          // NWS would be two more calls per city
+      const hiA=d[`temperature_2m_max_${m.id}`], loA=d[`temperature_2m_min_${m.id}`];
+      const hi=hiA?hiA[i]:null, lo=loA?loA[i]:null;
+      if(hi==null&&lo==null) return;    // a model absent here is not a row of dashes
+      per.push({id:m.id,label:m.label,who:m.who,hi,lo});
+    });
+    const hs=per.filter(x=>x.hi!=null).map(x=>x.hi);
+    const ls=per.filter(x=>x.lo!=null).map(x=>x.lo);
+    if(!hs.length&&!ls.length) return;
+    const mean=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
+    out.set(t,{date:t,per,
+      hi:mean(hs), lo:mean(ls), n:hs.length,
+      hSpread:hs.length?Math.max(...hs)-Math.min(...hs):null,
+      lSpread:ls.length?Math.max(...ls)-Math.min(...ls):null});
+  });
+  return out.size?out:null;
 }
 
 // Lays the chosen source over the forecast days. Every source keeps its own map, so
@@ -1202,14 +1304,23 @@ function note(html){ $("state").innerHTML=html; $("state").hidden=false; }
 function clearNote(){ $("state").hidden=true; }
 
 function syncButtons(){
-  const chart=mode==="chart", fc=mode==="fc", ver=mode==="ver";
+  const chart=mode==="chart", fc=mode==="fc", ver=mode==="ver", ms=mode==="ms";
   $("granpick").hidden=!chart;
   $("hotctl").hidden=mode!=="hot";
   $("panelpick").style.display=chart?"":"none";
   document.querySelectorAll("[data-days]").forEach(b=>b.hidden=!chart);
   $("out").hidden=!chart;
-  // Verification highlights your pick too, so the menu stays reachable there.
-  $("fcpick").hidden=!((chart||fc||ver)&&IS_CURRENT&&cities.length===1);
+  // Verification and the statewide table both mark your pick, so the menu stays
+  // reachable on them. The year picker does not: that table is always the next
+  // MS_DAYS days from today, whatever year is selected.
+  $("yearpick").hidden=ms;
+  // No chart on the statewide tab, so no key and nothing to export from it.
+  $("key").hidden=ms;
+  // Two-way, not a one-off hide: the export has to come back when the tab does.
+  $("dl").hidden=ms;
+  $("fcpick").hidden=ms
+    ? false
+    : !((chart||fc||ver)&&IS_CURRENT&&cities.length===1);
   $("tabs").querySelectorAll("[data-mode]").forEach(b=>
     b.setAttribute("aria-pressed",String(b.dataset.mode===mode)));
 
@@ -1489,6 +1600,145 @@ function drawFc(){
   $("readout").innerHTML=`<span class="stat">Daily high and overnight low, `
     +`every source that covers this point.</span>`;
   renderFcTable(solo,rows,dates);
+}
+
+function drawMs(){
+  $("fig").hidden=false;
+  const M=isMobile(), box=$("fcsrc");
+  $("key").innerHTML=""; $("stats").hidden=true;
+  const rows=MS_CITIES.filter(c=>msByCity.has(c.name));
+  if(!rows.length||!msDays.length){
+    box.hidden=true; $("hint2").textContent="";
+    $("readout").innerHTML=`<span class="stat">${msLoading?"Loading…":"Nothing to show."}</span>`;
+    $("stand").innerHTML=msLoading||!msTried
+      ? `Fetching every model's next ${MS_DAYS} days for the `
+        +`<b>${MS_CITIES.length}</b> cities…`
+      : `The model forecasts for these cities didn't load`
+        +(msErr.length?` — <code>${esc(msErr.slice(0,3).join("; "))}</code>`:``)
+        +`. Open-Meteo may be rate-limiting this browser; it clears on its own.`;
+    return;
+  }
+  const deg=M?"":"°";
+  const nice=t=>`${WDAYS[new Date(t+"T12:00:00").getDay()]}<span class="mon">`
+    +`${+t.slice(8)} ${MONTHS[+t.slice(5,7)-1]}</span>`;
+  // Shaded per column: a city's place among the other cities *that day*, which is the
+  // only reading that answers "where is it hottest today". Same rule as the forecast
+  // table, and the same ramp.
+  const stat=msDays.map(d=>{
+    const vs=rows.map(c=>msByCity.get(c.name).get(d)).filter(r=>r&&r.hi!=null).map(r=>r.hi);
+    return vs.length?{min:Math.min(...vs),max:Math.max(...vs)}:null;
+  });
+  const shade=(v,k)=>{
+    const st=stat[k]; if(!st) return "";
+    const f=st.max>st.min?(v-st.min)/(st.max-st.min):0.5;
+    const [r,g,b]=ramp(f*100,TEMP_STOPS);
+    return `background:rgba(${r},${g},${b},.5)`;
+  };
+  const cell=(rec,k,name,d)=>{
+    if(!rec||rec.hi==null) return `<td>&mdash;</td>`;
+    const hi=Math.round(rec.hi), lo=rec.lo==null?null:Math.round(rec.lo);
+    return `<td><button type="button" class="cell msbtn" style="${shade(rec.hi,k)}" `
+      +`data-city="${esc(name)}" data-date="${d}" `
+      +`aria-label="${esc(name)}, ${d}: high ${hi}, low ${lo==null?"unknown":lo}. `
+      +`Show the model breakdown"><b>${hi}${deg}</b>`
+      +`<i>${lo==null?"&mdash;":lo+deg}</i></button></td>`;
+  };
+  const worst=msDays.reduce((a,d)=>{
+    const sp=rows.map(c=>msByCity.get(c.name).get(d)).filter(r=>r&&r.hSpread!=null)
+      .reduce((x,r)=>Math.max(x,r.hSpread),0);
+    return Math.max(a,sp); },0);
+  const models=rows.reduce((a,c)=>{
+    const r=msByCity.get(c.name).get(msDays[0]); return Math.max(a,r?r.n:0); },0);
+  const missing=MS_CITIES.filter(c=>!msByCity.has(c.name));
+
+  box.innerHTML=`<h2>Mississippi, next ${msDays.length} days &mdash; °F</h2>`
+    +`<p class="lede">Daily high with the overnight low beneath it, each one the `
+    +`<b>average of ${models} forecast models</b> for that city and day. Shaded by where `
+    +`the city falls among the others <em>that day</em> — `
+    +`<b style="color:#3B8AC4">blue</b> the coolest, `
+    +`<b style="color:#C2542B">red</b> the warmest. `
+    +`<b>Tap any temperature</b> for the model-by-model breakdown behind it.</p>`
+    +`<div class="scroller"><table><thead><tr><th>City</th>`
+    +msDays.map(d=>`<th>${nice(d)}</th>`).join("")+`</tr></thead><tbody>`
+    +rows.map(c=>{
+        const m=msByCity.get(c.name);
+        return `<tr><td>${esc(c.name)}</td>`
+          +msDays.map((d,k)=>cell(m.get(d),k,c.name,d)).join("")+`</tr>`;
+      }).join("")
+    +`</tbody></table></div>`
+    +`<p class="foot">Every city is the mean of the same ${models} models, so the `
+    +`comparison between two cities is like for like. On the worst day they disagree `
+    +`by <b>${worst.toFixed(0)}°F</b> among themselves — the breakdown shows by how `
+    +`much for any single figure. <b>NWS is not in the average</b>: it takes two `
+    +`requests per city, which is ${MS_CITIES.length*2} calls this table does not `
+    +`spend. The whole grid is ${Math.ceil(MS_CITIES.length/MS_CHUNK)} requests, `
+    +`cached for half an hour.`
+    +(missing.length
+      ? ` <b>${missing.length}</b> cit${missing.length===1?"y is":"ies are"} missing — `
+        +`${missing.map(c=>esc(c.name)).join(", ")} — because a slice didn't answer: `
+        +`<code>${esc(msErr.slice(0,2).join("; "))}</code>`
+      : ``)+`</p>`;
+  box.hidden=false;
+  box.querySelectorAll("button.msbtn").forEach(b=>b.onclick=()=>{
+    const same=msSel&&msSel.name===b.dataset.city&&msSel.date===b.dataset.date;
+    if(same) closeMsFly(); else openMsFly(b.dataset.city,b.dataset.date,b);
+  });
+  markMsSel();
+
+  $("stand").innerHTML=`<b>${rows.length}</b> Mississippi cities, the next `
+    +`<b>${msDays.length}</b> days, each figure the average of <b>${models}</b> `
+    +`forecast models. Tap a temperature to see what each model actually said.`
+  $("hint2").textContent="Read down a column to find the warmest city that day, "
+    +"across a row to see one city's week.";
+  $("readout").innerHTML=`<span class="stat">Average daily high and overnight low. `
+    +`Tap any figure for its breakdown.</span>`;
+}
+
+// The breakdown behind one figure. Anchored to the cell and clamped inside the
+// figure, the same way the day-history card is.
+function openMsFly(name,date,el){
+  const fly=$("msfly"), m=msByCity.get(name), rec=m&&m.get(date);
+  if(!fly||!rec){ closeMsFly(); return; }
+  msSel={name,date};
+  const per=rec.per.slice().sort((a,b)=>
+    (b.hi==null?-Infinity:b.hi)-(a.hi==null?-Infinity:a.hi));
+  const f=v=>v==null?"&mdash;":Math.round(v)+"°";
+  const d=new Date(date+"T12:00:00");
+  fly.innerHTML=`<button class="x" type="button" aria-label="Close">&times;</button>`
+    +`<div class="hd"><div><h3>${esc(name)}</h3>`
+    +`<p class="who">${WDAYS[d.getDay()]} ${+date.slice(8)} `
+    +`${MONTHS_FULL[+date.slice(5,7)-1]}</p></div>`
+    +`<div class="rank">Average of<b>${rec.n}</b>models</div></div>`
+    +`<table class="msbd"><thead><tr><th>Model</th><th>High</th><th>Low</th></tr></thead>`
+    +`<tbody><tr class="avg"><td>Average</td>`
+    +`<td>${rec.hi==null?"&mdash;":rec.hi.toFixed(1)+"°"}</td>`
+    +`<td>${rec.lo==null?"&mdash;":rec.lo.toFixed(1)+"°"}</td></tr>`
+    +per.map(x=>`<tr${x.id===fcSource?' class="active"':''}>`
+      +`<td>${esc(x.label)}</td><td>${f(x.hi)}</td><td>${f(x.lo)}</td></tr>`).join("")
+    +`</tbody></table>`
+    +`<p class="foot">The models spread `
+    +`<b>${rec.hSpread==null?"—":rec.hSpread.toFixed(0)+"°"}</b> on the high and `
+    +`<b>${rec.lSpread==null?"—":rec.lSpread.toFixed(0)+"°"}</b> on the low here. `
+    +(rec.n<FC_MODELS.length-1
+      ? `The average is over the <b>${rec.n}</b> models that reach this day, not all `
+        +`${FC_MODELS.length-1}.`
+      : `Every one of the ${rec.n} models reaches this day.`)+`</p>`;
+  fly.hidden=false;
+  fly.querySelector(".x").onclick=closeMsFly;
+  const fig=$("fig"), fr=fig.getBoundingClientRect(), er=el.getBoundingClientRect();
+  fly.style.left=Math.max(8,Math.min(fr.width-fly.offsetWidth-8,
+    er.left-fr.left+er.width/2-fly.offsetWidth/2)).toFixed(0)+"px";
+  fly.style.top=(er.bottom-fr.top+6).toFixed(0)+"px";
+  markMsSel();
+}
+function closeMsFly(){
+  msSel=null;
+  const f=$("msfly"); if(f&&!f.hidden){ f.hidden=true; f.innerHTML=""; }
+  markMsSel();
+}
+function markMsSel(){
+  $("fcsrc").querySelectorAll("button.msbtn").forEach(b=>b.classList.toggle("sel",
+    !!msSel&&b.dataset.city===msSel.name&&b.dataset.date===msSel.date));
 }
 
 function drawVer(){
@@ -2086,6 +2336,10 @@ function weatherGlyph(kind,cx,top,size,fc){
 
 function draw(){
   closeFly();                 // the card is anchored to a bucket; a redraw moves it
+  closeMsFly();               // likewise: the breakdown is anchored to a table cell
+  // The statewide table is not a chart, and it does not depend on cities[] at all.
+  $("chart").style.display=mode==="ms"?"none":"";
+  if(mode==="ms") return drawMs();
   if(!cities.length) return;
   if(mode==="hot") return drawHot();
   if(mode==="fc") return drawFc();
@@ -2696,7 +2950,15 @@ function headline(solo){
     if(e.target.closest("#flyout")||e.target.closest("#chart")) return;
     closeFly();
   });
-  document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeFly(); });
+  // Dismiss on anything that is neither the card nor a figure in the table. The
+  // cells handle their own toggle, so this listener must leave them alone — it runs
+  // after their handler, when msSel already names the cell just clicked.
+  document.addEventListener("click",e=>{
+    if(e.target.closest("#msfly")||e.target.closest("button.msbtn")) return;
+    closeMsFly();
+  });
+  document.addEventListener("keydown",e=>{
+    if(e.key==="Escape"){ closeFly(); closeMsFly(); } });
 
   $("fcpick").innerHTML=FC_MODELS.map(m=>
     `<option value="${m.id}"${m.id===fcSource?" selected":""}>${esc(m.label)}</option>`).join("");
@@ -2717,8 +2979,9 @@ function headline(solo){
     mode=b.dataset.mode;
     // Loads fire before draw(), never after — see CLAUDE.md. The hot-days view wants
     // the normals response for its monthly average and the long archive for records.
-    // Neither the Forecast nor the Verification tab ever reads the normals.
+    // Only the Timeline and Hot days tabs ever read the normals.
     if(mode==="chart"||mode==="hot") maybeLoadClim();
+    if(mode==="ms") maybeLoadMs();
     if(mode==="hot") maybeLoadHist(cities.length===1?cities[0]:null);
     if(mode==="fc") maybeLoadAlt(cities.length===1?cities[0]:null);
     if(mode==="ver") maybeLoadVer(cities.length===1?cities[0]:null);

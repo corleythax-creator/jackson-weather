@@ -39,6 +39,7 @@ All keyless. All free tier.
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving |
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
+| **Statewide table** | `api.open-meteo.com/v1/forecast`, comma-separated coordinates | 11 cities × 13 models in 3 requests; one object per location, on demand |
 | **Forecast verification** | `previous-runs-api.open-meteo.com/v1/forecast` | `temperature_2m_max_previous_day1…7` for all 13 models; one call, on demand |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
 | Temperature/rain/solar normals | archive, 1991–2020 daily | WMO 30-year window; one request, cached per city |
@@ -59,6 +60,12 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   low shaded blue-to-red by where it falls among the sources that day, then spread and
   source-count rows. The point is to find the row matching whatever forecast you trust
   and pick it.
+- **Mississippi tab** — a fixed list of 11 cities (Southaven, Tupelo, Columbus,
+  Meridian, Natchez, Jackson, Greenville, Clarksdale, Cleveland, Greenwood, Grenada)
+  against the next 7 days. Each cell is the mean of the 13 Open-Meteo models for that
+  city and day, high over low, shaded by where the city falls among the others that
+  day. Tapping a figure opens the model-by-model breakdown behind it, anchored to the
+  cell. No chart on this tab.
 - **Verification tab** — how far each model's *published* forecast landed from what
   the archive later recorded, by lead time. A chart of average miss against days of
   warning (band, thin lines, bold average and bold best), and a table of every model
@@ -106,12 +113,13 @@ One `<script>`, no modules. In order:
    antecedent precipitation index (`buildApi` / `fitApi`).
 5. **Render** — `draw()` for the timeline, `drawHot()` for the Hot days tab,
    `drawFc()` for the forecast comparison, `drawVer()` for verification,
+   `drawMs()` for the statewide table,
    `renderReadout(i, select)` for the figures above the chart.
 6. **Interaction** — one IIFE at the bottom wires mouse, touch, and all controls.
 
 ### State
 
-`year`, `mode` (`fc` | `chart` | `hot` | `ver`), `gran` (`day` | `week` | `month`), `thresh`,
+`year`, `mode` (`fc` | `ms` | `chart` | `hot` | `ver`), `gran` (`day` | `week` | `month`), `thresh`,
 `view` (a date-index range), `selDate`, `activePanel` (mobile), `soilOn`, `solarOn`,
 `cities[]`.
 
@@ -179,6 +187,37 @@ Changing these without understanding why breaks correctness, not just appearance
   a model whose arrays are all null, and `fcRows()` only lists maps with entries, so a
   model with no coverage is absent rather than a row of dashes. Verified by stubbing
   two models to null and watching 14 sources become 12.
+- **Eleven cities are three requests, not eleven.** Open-Meteo takes comma-separated
+  `latitude`/`longitude` and answers with one object per location, in the order asked.
+  A city-at-a-time loop would have been eleven calls against a free tier that has
+  already collapsed this app once. It goes out in `MS_CHUNK`-city slices rather than
+  one request because a slice that fails costs four cities instead of all eleven —
+  the same reasoning as `HIST_CHUNK` — settled with `allSettled` so partial coverage
+  beats none. A single-location response comes back as a bare object rather than an
+  array, so `maybeLoadMs()` normalises with `Array.isArray(...) ? ... : [...]`; a
+  final chunk of one would otherwise parse as nothing.
+- **The statewide list is fixed, and kept in the order it was asked for.** It is not
+  `cities[]` — searching, removing and the 5-city limit do not apply, and the tab
+  renders with no city loaded at all, which is why its dispatch sits *before* the
+  `if(!cities.length) return` in `draw()`. The coordinates are town centres to about
+  a mile, far inside any model's grid cell. Alphabetising them would be a change to
+  what was asked for, not a tidy-up.
+- **NWS is not in the statewide average.** It is two calls per city — 22 more
+  requests — which is exactly the budget this table was designed around. The footnote
+  says so and gives the number, so the omission reads as a decision rather than a
+  gap.
+- **Missing cities are named, and counted as cities.** A failed slice produces one
+  error message covering four cities; reporting `msErr.length` said "1 did not load"
+  when four were gone. The footnote is built from
+  `MS_CITIES.filter(c => !msByCity.has(c.name))` and lists them by name.
+- **The statewide tab ignores `year`, so the year picker is hidden on it.** It is
+  always the next `MS_DAYS` days from today. Leaving the control visible would invite
+  the reading that 2015 shows 2015.
+- **The breakdown's toggle lives in the cell's own handler, not the dismiss
+  listener.** The document-level listener runs *after* the button's handler, by which
+  point `msSel` already names the cell just clicked — so "close when the click is on
+  the selected cell" closed the card on the same click that opened it. The listener
+  now ignores `button.msbtn` entirely and the button decides open-or-close itself.
 - **Verification scores what a model *said*, not what it now says.** This is the
   whole reason it uses `previous-runs-api` rather than the ordinary archive.
   `temperature_2m_max_previous_day3` is the high a model published three days before
@@ -361,6 +400,14 @@ Changing these without understanding why breaks correctness, not just appearance
   position, so any zoom, aggregation, year or tab change would leave it pointing at
   the wrong day. It lives in `#fig` and never inside `#readout`, so the rule below
   still holds both ways.
+- **`.key` needed `[hidden]` spelled out too.** `.key{display:flex}` is the same trap
+  `.grp` fell into: the statewide tab hides the key, and without `.key[hidden]
+  {display:none}` an empty flex row kept its margins. That is now two elements caught
+  by the same rule — check any element with an author `display` before relying on
+  `hidden`.
+- **`#dl` is toggled two ways, not hidden once.** The CSV button is revealed once at
+  wiring time, so a one-way `hidden = true` on the statewide tab removed it for the
+  rest of the session. `syncButtons()` sets `$("dl").hidden = ms` both ways.
 - **Verification needs the current year.** The window is the last `VER_DAYS` days,
   but the truth comes from `city.byDate`, which only holds the viewed year. On a past
   year there is no overlap, so `drawVer()` says so and stops rather than scoring
