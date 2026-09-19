@@ -61,9 +61,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   low shaded blue-to-red by where it falls among the sources that day, then spread and
   source-count rows. The point is to find the row matching whatever forecast you trust
   and pick it.
-- **Mississippi tab** — a fixed list of 11 cities (Southaven, Tupelo, Clarksdale,
-  Grenada, Cleveland, Greenwood, Columbus, Greenville, Meridian, Jackson, Natchez,
-  ordered north to south) against the next 7 days. Each cell is the mean of the 13
+- **Mississippi tab** — a fixed list of 12 cities (Southaven, Tupelo, Clarksdale,
+  Grenada, Cleveland, Greenwood, Columbus, Greenville, Kosciusko, Meridian, Jackson,
+  Natchez, ordered north to south) against the next 7 days. Each cell is the mean of the 13
   Open-Meteo models *and NWS* for that city and day, high over low, shaded by where
   the city falls among the others that day. Above it, a **map**: a hand-traced
   Mississippi outline with the cities at their real coordinates, each a marker
@@ -208,9 +208,11 @@ Changing these without understanding why breaks correctness, not just appearance
   `if(!cities.length) return` in `draw()`. The coordinates are town centres to about
   a mile, far inside any model's grid cell. The `.sort()` is on the constant rather
   than at render time, so the chunking, the table and the breakdown all agree on one
-  order.
+  order. Adding Kosciusko took it to twelve, which is exactly three `MS_CHUNK`
+  slices — the model side still costs three requests, and NWS went from 22 calls to
+  24. Both numbers are interpolated into the footnote rather than written out.
 - **NWS is in the statewide average, and it is the expensive part.** Three requests
-  fetch 13 models for 11 cities; NWS is two calls per city on top, because it takes
+  fetch 13 models for all of them; NWS is two calls per city on top, because it takes
   one point at a time. They go four at a time through `pool()` rather than
   twenty-two at once, and they land *after* the table has already drawn from the
   models, so the tab is useful immediately and fills in. What makes it affordable is
@@ -285,13 +287,32 @@ Changing these without understanding why breaks correctness, not just appearance
   edge, chain the count-2 edges into the mesh and the count-1 edges into the ring,
   then simplify. There is no runtime fetch and no dependency — the single-file rule
   still holds, the data is just baked in.
-- **`MS_ROADS` is still approximate, and the caption says so.** Ten major routes —
-  I-55, I-20, I-59, I-10, I-22, US 61, 45, 49, 82 and 84 — as hand-traced centrelines,
-  good enough to place a city against a road and not to navigate by. Each end is
-  extended along its own heading until it meets the real border, so no route dangles
-  short of the state line. **I-59's last vertex is exempt**: it merges with I-20 at
-  Meridian and the two run concurrently into Alabama, so that end is a junction, not
-  a crossing — extending it threw the line 0.66° off before that exception existed.
+- **`MS_ROADS` is still approximate, and the caption says so.** Eleven major routes —
+  I-55, I-20, I-59, I-10, I-22, US 61, 45, 49, 82, 84 and the Natchez Trace Parkway —
+  as hand-traced centrelines, good enough to place a city against a road and not to
+  navigate by. Each end is extended along its own heading until it meets the real
+  border, so no route dangles short of the state line. **Two ends are exempt, and any
+  new route must be checked for the same thing**: a road that *stops* inside
+  Mississippi must not be extended to the state line. I-59's last vertex merges with
+  I-20 at Meridian and the two run concurrently into Alabama — extending it threw the
+  line 0.66° off. The Trace's southern end is a terminus at Natchez, not a crossing;
+  extending it ran the parkway out into Louisiana.
+- **The Natchez Trace is on the map because of Kosciusko.** The Trace runs Natchez –
+  Jackson – Kosciusko – Tupelo and is both the direct and the obvious drive from
+  Jackson, so it is the route that answers "how would I get there". It is a parkway
+  rather than an interstate, so it draws in the thinner US-highway style.
+- **`MS_PLACES` are markers with no forecast behind them.** Amory, Yazoo City and
+  Lucedale are there for orientation only: a smaller, dimmer dot and a smaller name,
+  deliberately unlike a station so a reader cannot mistake one for a station whose
+  number failed to load. They are not in `MS_CITIES`, so they cost no requests and
+  never reach the table, the ranking or the breakdown, and nothing about them is
+  tappable. The harness asserts a place never renders a second text node — that is
+  what a stray temperature would look like.
+- **Station labels are placed before place labels.** Both go through the same
+  four-candidate collision placer, which now takes a radius and a text size, but the
+  stations carry the numbers so they get the clear ground and a place name gives way.
+  All twelve markers and all three place dots are obstacles before any label is
+  placed, so order within each group cannot change the result.
 - **Road geometry is checked against the outline, not against the eye.** Every road
   vertex *and* 50 sampled points along every segment are tested point-in-polygon
   against `MS_OUTLINE` — 3,610 points in total, all of which must fall inside. The
