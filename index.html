@@ -317,6 +317,10 @@
       <button data-mode="ver" aria-pressed="false">Verification</button>
     </div>
     <div class="controls topctl">
+      <span class="grp" id="fcview" role="tablist" aria-label="Forecast resolution" hidden>
+        <button data-fcview="daily" aria-pressed="true">Daily</button>
+        <button data-fcview="hourly" aria-pressed="false">Hourly</button>
+      </span>
       <select id="yearpick" aria-label="Year"></select>
       <select id="fcpick" aria-label="Forecast source" hidden></select>
       <span class="grp" id="mspick" role="group" aria-label="Day" hidden></span>
@@ -470,6 +474,11 @@ const FC_MODELS=[
 ];
 const ALT_MODELS=FC_MODELS.filter(m=>m.id!=="nws").map(m=>m.id).join(",");
 const FC_SRC_KEY="jw:fcsrc";
+const FC_VIEW_KEY="jw:fcview";   // the Daily/Hourly choice sticks, like the source does
+// Hourly comparison. Two days is the honest ceiling: past that the models diverge
+// faster than an hour-by-hour reading is worth, and 48 columns is already the most a
+// table can carry. A phone gets one day, which is the window a phone is used for.
+const HR_HOURS=48, HR_HOURS_M=24;
 // Verification. Open-Meteo's previous-runs archive keeps what each model *said* at a
 // fixed lead time, so temperature_2m_max_previous_day3 is the high that model
 // published three days before the day it applies to. Scoring a model's current
@@ -583,6 +592,8 @@ let cities=[], view={a:0,b:DATES.length-1}, preset=0, seq=0;
 let msByCity=new Map(), msDays=[], msTried=false, msLoading=false, msErr=[], msSel=null;
 let msNwsDone=false, msNwsMissing=[], msDay=0;
 let soilOn=false, solarOn=false, hvacOn=false, activePanel="temp", gran="day";
+let fcView=(()=>{ try{ return localStorage.getItem(FC_VIEW_KEY)==="hourly"?"hourly":"daily"; }
+                  catch(e){ return "daily"; } })();
 let mode="fc", thresh=100, selDate=null;   // the forecast comparison is the landing view
 const HOT_CHOICES=[85,90,95,100,105,110];
 
@@ -725,12 +736,14 @@ async function addCity(lat,lon,label){
 
   const city={key,label,lat,lon,color:nextColor(),byDate:new Map(),
               climRaw:null,clim:null,histRaw:null,histTried:false,histLoading:false,histErr:null,
-              soilBase:null,soil:null,api:null,hvac:null,hvacTried:false,loading:true,id:++seq};
+              soilBase:null,soil:null,api:null,hvac:null,hvacTried:false,
+              hr:null,hrTried:false,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
   if(cities.includes(city)){
     if(mode==="chart"||mode==="hot") maybeLoadClim();
     if(mode==="ver") maybeLoadVer(city);
+    if(mode==="fc"&&fcView==="hourly") maybeLoadHourly(city);
     maybeLoadSoil();
     if(hvacOn) maybeLoadHvac(city);
   }
@@ -780,7 +793,14 @@ async function loadCity(city){
     try{ city.nwsMap=await nwsForecast(city.lat,city.lon); }catch(e){ city.nwsMap=null; }
   }
   applySource(city);
-  if(IS_CURRENT&&(mode==="fc"||fcSource!=="nws")) maybeLoadAlt(city);
+  // Landing on the Forecast tab loads the view that is actually showing. The daily
+  // model set is still pulled whenever a model — rather than NWS — drives the
+  // Timeline, because that is what applySource() reads.
+  if(IS_CURRENT){
+    const onHourly=mode==="fc"&&fcView==="hourly";
+    if(onHourly) maybeLoadHourly(city);
+    if((mode==="fc"&&!onHourly)||fcSource!=="nws") maybeLoadAlt(city);
+  }
   // est: on or before today, but not an observation — the ERA5 lag window. Kept
   // because it is the best estimate available, flagged because it is not measured.
   city.byDate.forEach(r=>{ r.est=!r.fc&&r.src!=="archive"; });
@@ -819,6 +839,45 @@ function absorb(city,json,tag){
     city.byDate.set(t,{date:t,hi,lo,mean:mn==null?(hi+lo)/2:mn,pr,
       solar:sr==null?null:sr/3.6, uv, pop, wc, src:tag, fc:t>OBS_END});
   });
+}
+
+/* ---------- hourly comparison ----------
+   One Open-Meteo call carries every model's hourly temperature, suffixed by model id
+   exactly as the daily call is, plus one NWS call. Lazy and once per city per session:
+   the Daily view is the landing view and never reads this.
+
+   Two of the thirteen models answer hourly with nothing but nulls — KMA and ACCESS-G
+   publish no hourly temperature at this point. They are dropped here rather than
+   drawn as a row of dashes, which is the rule absorbAlt() already applies to the
+   daily models, so the hourly comparison honestly runs over fewer sources than the
+   daily one and the footnote says the count out loud. */
+async function maybeLoadHourly(city){
+  if(!city||city.hrTried) return;
+  city.hrTried=true;
+  try{
+    const j=await grabCached(`https://api.open-meteo.com/v1/forecast?latitude=${city.lat}`
+      // `units` already carries timezone=auto — passing it twice is what a second
+      // &timezone= here would do, and the local-hour keys depend on it being right.
+      +`&longitude=${city.lon}&hourly=temperature_2m&models=${ALT_MODELS}${units}`
+      +`&forecast_days=3`, "hr", TTL_LIVE);
+    const h=j&&j.hourly;
+    if(h&&h.time){
+      const out={};
+      FC_MODELS.forEach(m=>{
+        if(m.id==="nws") return;
+        const arr=h[`temperature_2m_${m.id}`]; if(!arr) return;
+        const map=new Map();
+        h.time.forEach((t,i)=>{ if(arr[i]!=null) map.set(t,arr[i]); });
+        if(map.size) out[m.id]=map;      // a model with no coverage never becomes a row
+      });
+      if(Object.keys(out).length) city.hr=out;
+    }
+  }catch(e){ /* the NWS leg below may still give a row */ }
+  try{
+    const nw=await nwsHourly(city.lat,city.lon);
+    if(nw){ city.hr=city.hr||{}; city.hr.nws=nw; }
+  }catch(e){ /* api.weather.gov is US-only; a non-US point simply has no NWS row */ }
+  if(cities.includes(city)&&mode==="fc") draw();
 }
 
 // Fetched only when a model is actually driving the chart, or when the comparison is
@@ -1030,13 +1089,46 @@ function applySource(city){
 // NWS is the authoritative US forecast and is what weather.com / Weather Underground
 // show. Open-Meteo's model blend runs several degrees off it, so NWS wins where it
 // has coverage. Two calls: resolve the grid, then read the periods.
+// The grid lookup, shared by the daily and hourly forecasts so the pair costs one
+// request rather than two. The tag is `nwspt2` rather than `nwspt` deliberately: the
+// URL is unchanged, so the cache key is unchanged, and a browser holding a month-old
+// entry from before `forecastHourly` was kept would serve a response missing the very
+// field the hourly view reads. Changing what a response *keeps* needs a new tag for
+// the same reason changing what a request *asks for* needs a new key.
+function nwsPoint(lat,lon){
+  return grabCached(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
+    "nwspt2", TTL_STATIC, j=>!!(j&&j.properties&&j.properties.forecast),
+    j=>({properties:{forecast:j.properties.forecast,
+                     forecastHourly:j.properties.forecastHourly}}));
+}
+
+// NWS's hour-by-hour grid, one temperature per hour in local wall-clock time —
+// which is what Open-Meteo returns under timezone=auto, so the two key alike.
+async function nwsHourly(lat,lon){
+  const p=await nwsPoint(lat,lon);
+  const url=p&&p.properties&&p.properties.forecastHourly;
+  if(!url) return null;
+  const f=await grabCached(url,"nwshr",TTL_LIVE,
+    j=>!!(j&&j.properties&&j.properties.periods&&j.properties.periods.length),
+    // Trimmed hard: the hourly feed runs to 156 periods with a dewpoint, a wind, an
+    // icon and a short forecast on each, and this reads two fields.
+    j=>({properties:{periods:j.properties.periods.map(x=>({startTime:x.startTime,
+      temperature:x.temperature, temperatureUnit:x.temperatureUnit}))}}));
+  const per=f&&f.properties&&f.properties.periods;
+  if(!per||!per.length) return null;
+  const out=new Map();
+  per.forEach(x=>{
+    if(x.temperatureUnit!=="F"||x.temperature==null) return;
+    out.set(x.startTime.slice(0,13)+":00", x.temperature);
+  });
+  return out.size?out:null;
+}
+
 async function nwsForecast(lat,lon){
   // The grid lookup is a fixed property of the coordinate, so it is kept for a month;
   // the periods are a forecast, so half an hour. Together that takes a warm browser
   // from two requests per city to none — which is what makes eleven cities affordable.
-  const p=await grabCached(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
-    "nwspt", TTL_STATIC, j=>!!(j&&j.properties&&j.properties.forecast),
-    j=>({properties:{forecast:j.properties.forecast}}));
+  const p=await nwsPoint(lat,lon);
   const url=p&&p.properties&&p.properties.forecast;
   if(!url) return null;
   const f=await grabCached(url,"nwsfc",TTL_LIVE,
@@ -1570,7 +1662,13 @@ function syncButtons(){
   // Verification and the statewide table both mark your pick, so the menu stays
   // reachable on them. The year picker does not: that table is always the next
   // MS_DAYS days from today, whatever year is selected.
-  $("yearpick").hidden=ms;
+  // The Daily/Hourly switch belongs to the Forecast tab and nowhere else.
+  $("fcview").hidden=!fc;
+  $("fcview").querySelectorAll("[data-fcview]").forEach(b=>
+    b.setAttribute("aria-pressed",String(b.dataset.fcview===fcView)));
+  // Hourly is always the next two days from now, so the year picker means nothing
+  // there — the same reasoning that hides it on the statewide tab.
+  $("yearpick").hidden=ms||(fc&&fcView==="hourly");
   $("mspick").hidden=!ms;
   $("key").hidden=false;
   // Two-way, not a one-off hide: the export has to come back when the tab does.
@@ -1742,6 +1840,150 @@ function fcDates(rows){
   }
   return out;
 }
+
+/* The hourly chart. The same vocabulary as the daily one — band for the full spread,
+   every model a thin line, the average bold with labelled rings, the chosen source in
+   green — with one plume instead of two, because an hour has a temperature rather than
+   a high and a low. */
+function drawFcHourly(){
+  const svg=$("chart"); $("fig").hidden=false;
+  const M=isMobile();
+  const solo=cities.length===1?cities[0]:null;
+  const say=t=>{ svg.setAttribute("viewBox",`0 0 ${M?380:1000} 120`);
+    svg.innerHTML=`<text x="${M?12:20}" y="60" fill="var(--ink-soft)">${t}</text>`;
+    svg._geom=null; $("key").innerHTML=""; $("fcsrc").hidden=true;
+    $("stats").hidden=true; $("hint2").textContent=""; };
+  if(!solo){ say("Drop to one city to compare forecast sources.");
+    $("stand").innerHTML=`The hourly comparison shows one city at a time.`; return; }
+  if(!IS_CURRENT){ say(`${year} is over — there is no forecast to compare.`);
+    $("stand").innerHTML=`Pick the current year to compare forecasts.`; return; }
+  const rows=fcHourRows(solo);
+  if(!rows.length){ say(solo.hrTried?"The hourly models didn't load.":"Loading hourly forecasts…");
+    $("stand").innerHTML=solo.hrTried
+      ? `The hourly forecasts didn't load — Open-Meteo may be rate-limiting this browser.`
+      : `Fetching every hourly forecast source for <b>${esc(solo.label)}</b>…`;
+    return; }
+  const hours=fcHours(rows,M);
+  if(!hours.length){ say("No forecast hours available."); return; }
+
+  const W=M?380:1000, L=M?34:52, R=M?10:16, T=M?28:32, BH=M?200:278;
+  const iw=W-L-R, XLAB=T+BH+20, H=XLAB+(M?28:32);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const X=i=>L+(hours.length<2?iw/2:i*iw/(hours.length-1));
+
+  let lo=Infinity,hi=-Infinity;
+  rows.forEach(r=>hours.forEach(t=>{const v=r.map.get(t);
+    if(v!=null){lo=Math.min(lo,v);hi=Math.max(hi,v);}}));
+  if(!isFinite(lo)){ say("No forecast hours available."); return; }
+  const y0=Math.floor((lo-3)/5)*5, y1=Math.ceil((hi+3)/5)*5;
+  const Y=v=>T+BH-(v-y0)/(y1-y0||1)*BH;
+
+  let s="";
+  const step=(y1-y0>40)?10:5;
+  for(let v=y0;v<=y1;v+=step)
+    s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
+      +`<text x="${L-8}" y="${(Y(v)+4).toFixed(1)}" text-anchor="end">${v}°</text>`;
+
+  const agg=t=>{
+    const vs=rows.map(r=>r.map.get(t)).filter(v=>v!=null);
+    return vs.length?{min:Math.min(...vs),max:Math.max(...vs),n:vs.length,
+                      avg:vs.reduce((a,b)=>a+b,0)/vs.length}:null;
+  };
+  const band=hours.map((t,i)=>{const a=agg(t); return a?Object.assign({i},a):null;}).filter(Boolean);
+  if(band.length>1){
+    const top=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.max).toFixed(1)}`);
+    const bot=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.min).toFixed(1)}`);
+    s+=`<polygon class="normalband" points="${top.join(" ")} ${bot.slice().reverse().join(" ")}"/>`;
+  }
+  const line=(r,cls)=>{
+    const pts=hours.map((t,i)=>{const v=r.map.get(t);
+      return v!=null?`${X(i).toFixed(1)},${Y(v).toFixed(1)}`:null;}).filter(Boolean);
+    return pts.length>1?`<polyline class="${cls}" points="${pts.join(" ")}"/>`:"";
+  };
+  rows.forEach(r=>{ if(r.id!==fcSource) s+=line(r,"fcthin"); });
+  const pick=rows.find(r=>r.id===fcSource);
+  if(pick) s+=line(pick,"fcnws");
+  {
+    const pts=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.avg).toFixed(1)}`);
+    if(pts.length>1) s+=`<polyline class="fcpick2" points="${pts.join(" ")}"/>`;
+  }
+
+  // A rule and a date at every midnight, so a 48-hour axis reads as two days rather
+  // than a run of repeating clock numbers.
+  hours.forEach((t,i)=>{
+    const midnight=t.slice(11,13)==="00";
+    // The first column is dated too, so the opening block reads as today rather than
+    // as an unlabelled run of hours before the first midnight.
+    if(!midnight&&i) return;
+    if(midnight&&i) s+=`<line class="monthrule" x1="${X(i).toFixed(1)}" y1="${T}" `
+      +`x2="${X(i).toFixed(1)}" y2="${T+BH}"/>`;
+    s+=`<text x="${X(i).toFixed(1)}" y="${XLAB+(M?13:15)}" `
+      +`text-anchor="${i?"middle":"start"}">${pretty(t.slice(0,10))}</text>`;
+  });
+  const maxLab=M?6:14, lstep=Math.max(1,Math.ceil(hours.length/maxLab));
+  hours.forEach((t,i)=>{
+    if(i%lstep) return;
+    s+=`<text x="${X(i).toFixed(1)}" y="${XLAB}" text-anchor="middle">${hourLab(t)}</text>`;
+  });
+  {
+    // Forty-eight rings will not fit where sixteen did, so they go on every nth hour
+    // instead of every hour — the same "spacing >= 2 * radius" rule the rest of the
+    // app uses, solved for n rather than used to switch the rings off entirely.
+    const rr=M?10:11.5, sp=hours.length<2?iw:iw/(hours.length-1);
+    const cstep=Math.max(1,Math.ceil(2*rr/Math.max(sp,0.01)));
+    const node=(x,v,col)=>{
+      const n=String(Math.round(v)), f=Math.min(M?10:10.5,(2*rr-3)/(n.length*0.6));
+      return `<circle cx="${x.toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${rr}" fill="var(--paper)" `
+        +`stroke="${col}" stroke-width="1.4"/>`
+        +`<text class="dnode" x="${x.toFixed(1)}" y="${(Y(v)+f*0.35).toFixed(1)}" `
+        +`text-anchor="middle" style="fill:${col}" font-size="${f.toFixed(1)}">${n}</text>`;
+    };
+    band.forEach(b=>{ if(b.i%cstep===0) s+=node(X(b.i),b.avg,"var(--hot)"); });
+  }
+  s+=`<text class="panellabel" x="${L}" y="${T-12}">Temperature °F, hour by hour — average of all sources</text>`;
+  svg.innerHTML=s; svg._geom=null;
+
+  const worst=band.reduce((a,b)=>Math.max(a,b.max-b.min),0);
+  const pickName=(FC_MODELS.find(m=>m.id===fcSource)||{}).label||fcSource;
+  $("key").innerHTML=`<span><i style="background:var(--hot)"></i>Average temperature</span>`
+    +(pick?`<span><i style="background:var(--today)"></i>${esc(pickName)}, your pick</span>`:``)
+    +`<span><i style="background:var(--ink-soft)"></i>Every other source</span>`
+    +`<span><i class="swatch"></i>Full spread</span>`;
+  $("stand").innerHTML=`<b>${esc(solo.label)}</b> &mdash; the bold line averages `
+    +`<b>${rows.length}</b> hourly sources over the next <b>${hours.length}</b> hours, which `
+    +`disagree by as much as <b>${worst.toFixed(0)}°F</b> in one hour`
+    +(pick?`. <b>${esc(pickName)}</b> is picked out in green.`:`.`);
+  $("hint2").textContent="Read down a column for how far apart the sources are in one hour, "
+    +"across a row to follow one source through the day.";
+  $("stats").hidden=true;
+  $("readout").innerHTML=`<span class="stat">Hourly temperature, `
+    +`every source that publishes one for this point.</span>`;
+  renderFcHourTable(solo,rows,hours);
+}
+
+function fcHourRows(city){
+  if(!city.hr) return [];
+  // FC_MODELS order, so the hourly table reads in the same order as the daily one.
+  return FC_MODELS.map(m=>{
+    const map=city.hr[m.id];
+    return (map&&map.size)?Object.assign({},m,{map}):null;
+  }).filter(Boolean);
+}
+
+// From the current hour forward. The hours already elapsed today are not a forecast,
+// and showing them would put a model's analysis of 6am beside its forecast of 6pm.
+function fcHours(rows,M){
+  const d=new Date(), p=n=>String(n).padStart(2,"0");
+  const from=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:00`;
+  const all=new Set();
+  rows.forEach(r=>r.map.forEach((v,t)=>{ if(t>=from) all.add(t); }));
+  // Lexical sort is chronological for a fixed-width local timestamp.
+  return [...all].sort().slice(0,M?HR_HOURS_M:HR_HOURS);
+}
+const hourLab=t=>{
+  const h=+t.slice(11,13);
+  return `${h%12===0?12:h%12}${h<12?"a":"p"}`;
+};
 
 function drawFc(){
   const svg=$("chart"); $("fig").hidden=false;
@@ -2878,7 +3120,7 @@ function draw(){
   if(mode==="ms") return drawMs();
   if(!cities.length) return;
   if(mode==="hot") return drawHot();
-  if(mode==="fc") return drawFc();
+  if(mode==="fc") return fcView==="hourly"?drawFcHourly():drawFc();
   if(mode==="ver") return drawVer();
   const svg=$("chart"); $("fig").hidden=false;
   const M=isMobile();
@@ -3320,6 +3562,62 @@ function draw(){
 // The table the Forecast tab is built around: every source down the side, every day
 // across the top. Highs are what people compare, so they lead; the overnight low sits
 // under each one. A source that does not cover this point never became a row.
+function renderFcHourTable(solo,rows,hours){
+  const box=$("fcsrc"), M=isMobile();
+  const deg=M?"":"°";
+  // Per hour: the sources' own range, which every cell in that column is shaded
+  // against. Same per-column ranking as the daily table — the only reading that
+  // answers "is this source warm or cool for this hour".
+  const stat=hours.map(t=>{
+    const vs=rows.map(r=>r.map.get(t)).filter(v=>v!=null);
+    if(!vs.length) return null;
+    return {min:Math.min(...vs), max:Math.max(...vs), n:vs.length,
+            avg:vs.reduce((a,b)=>a+b,0)/vs.length};
+  });
+  const shade=(v,k)=>{
+    const st=stat[k]; if(!st) return "";
+    const f=st.max>st.min?(v-st.min)/(st.max-st.min):0.5;
+    const [r,g,b]=ramp(f*100,TEMP_STOPS);
+    return `background:rgba(${r},${g},${b},.5)`;
+  };
+  const cell=(v,k,dp)=>{
+    if(v==null) return `<td>&mdash;</td>`;
+    const f=x=>(dp&&!M)?x.toFixed(1):String(Math.round(x));
+    return `<td><span class="cell" style="${shade(v,k)}"><b>${f(v)}${deg}</b></span></td>`;
+  };
+  const nMin=stat.filter(Boolean).reduce((a,b)=>Math.min(a,b.n),99);
+  const nMax=stat.filter(Boolean).reduce((a,b)=>Math.max(a,b.n),0);
+  box.innerHTML=`<h2>Every forecast source, hour by hour &mdash; °F</h2>`
+    +`<p class="lede">Temperature at each hour, shaded by where it falls among the `
+    +`sources for <em>that hour</em> — <b style="color:#3B8AC4">blue</b> the coolest of `
+    +`them, <b style="color:#C2542B">red</b> the warmest. The table scrolls sideways `
+    +`across ${hours.length} hours.</p>`
+    +`<div class="scroller"><table><thead><tr><th>Source</th>`
+    +hours.map((t,i)=>{
+      // The date only where the day turns over, the same rule the daily table uses
+      // for the month — repeating it on every column is 48 lines of noise.
+      const day=i===0||t.slice(0,10)!==hours[i-1].slice(0,10);
+      return `<th>${hourLab(t)}`+(day?`<span class="mon">${pretty(t.slice(0,10))}</span>`:``)+`</th>`;
+    }).join("")+`</tr></thead><tbody>`
+    +`<tr class="avg"><td>Average`
+      +`<span class="who">mean of the sources reaching each hour</span></td>`
+    +stat.map((st,k)=>cell(st&&st.avg,k,true)).join("")+`</tr>`
+    +rows.map(r=>`<tr${r.id===fcSource?' class="active"':''}>`
+      +`<td>${esc(r.label)}<span class="who">${esc(r.who||"")}</span></td>`
+      +hours.map((t,k)=>cell(r.map.get(t),k,false)).join("")+`</tr>`).join("")
+    +`<tr class="spread"><td>Spread<span class="who">warmest minus coolest</span></td>`
+    +stat.map(st=>`<td>${st&&st.max>st.min?(st.max-st.min).toFixed(0)+deg:"—"}</td>`).join("")+`</tr>`
+    +`<tr class="spread"><td>Sources<span class="who">reaching that hour</span></td>`
+    +stat.map(st=>`<td>${st?st.n:"—"}</td>`).join("")+`</tr>`
+    +`</tbody></table></div>`
+    +`<p class="foot">Fewer sources than the Daily view: KMA and ACCESS-G publish no `
+    +`hourly temperature at this point, so they are absent rather than shown as a row `
+    +`of dashes — this table runs over ${nMax===nMin?nMax:`${nMin}–${nMax}`} sources `
+    +`against the daily comparison's fourteen. Every model still arrives in one `
+    +`request, with NWS's hourly grid as a second.</p>`;
+  box.hidden=false;
+}
+
 function renderFcTable(solo,rows,dates){
   const box=$("fcsrc"), M=isMobile();
   // Seventeen columns will not fit a phone whatever happens, but the degree sign is
@@ -3597,6 +3895,15 @@ function headline(solo){
   $("thresh").innerHTML=HOT_CHOICES.map(v=>
     `<option value="${v}"${v===thresh?" selected":""}>${v}°F</option>`).join("");
   $("thresh").onchange=e=>{ thresh=+e.target.value; draw(); };
+  $("fcview").querySelectorAll("[data-fcview]").forEach(b=>b.onclick=()=>{
+    fcView=b.dataset.fcview;
+    try{ localStorage.setItem(FC_VIEW_KEY,fcView); }catch(e){}
+    const c=cities.length===1?cities[0]:null;
+    // Load before draw(), the same ordering every other handler here follows.
+    if(fcView==="hourly") maybeLoadHourly(c); else maybeLoadAlt(c);
+    syncButtons(); draw();
+  });
+
   $("tabs").querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{
     mode=b.dataset.mode;
     // Loads fire before draw(), never after — see CLAUDE.md. The hot-days view wants
@@ -3605,7 +3912,13 @@ function headline(solo){
     if(mode==="chart"||mode==="hot") maybeLoadClim();
     if(mode==="ms") maybeLoadMs();
     if(mode==="hot") maybeLoadHist(cities.length===1?cities[0]:null);
-    if(mode==="fc") maybeLoadAlt(cities.length===1?cities[0]:null);
+    // Only the view actually showing is fetched. Landing on Hourly must not also pull
+    // the daily model set, and vice versa — a cold load stays at three Open-Meteo
+    // calls plus the one this view needs.
+    if(mode==="fc"){
+      const c=cities.length===1?cities[0]:null;
+      if(fcView==="hourly") maybeLoadHourly(c); else maybeLoadAlt(c);
+    }
     if(mode==="ver") maybeLoadVer(cities.length===1?cities[0]:null);
     syncButtons(); draw();
   });

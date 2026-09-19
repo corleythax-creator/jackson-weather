@@ -46,6 +46,8 @@ All keyless. All free tier.
 | Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving. Both cached — the grid lookup for a month, the periods for half an hour |
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
+| **Hourly comparison** | `api.open-meteo.com/v1/forecast` with `hourly=` + `models=` | every model's hourly temperature in one call, suffixed by model id; on demand |
+| Hourly NWS | `api.weather.gov` `/forecast/hourly` | one temperature per hour, 156 of them; shares the cached grid lookup |
 | **Statewide table** | `api.open-meteo.com/v1/forecast`, comma-separated coordinates | 11 cities × 13 models in 3 requests; one object per location, on demand |
 | Statewide NWS | `api.weather.gov` | 2 calls per city, 4 at a time; folded into the same average |
 | **Forecast verification** | `previous-runs-api.open-meteo.com/v1/forecast` | `temperature_2m_max_previous_day1…7` for all 13 models; one call, on demand |
@@ -61,7 +63,15 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
 
 ## Feature map
 
-- **Forecast tab (the landing view)** — every forecast source's daily high, day by day.
+- **Forecast tab (the landing view)** — a **Daily** and an **Hourly** view of the same
+  question, switched above the chart. Both are one city against every source.
+  - **Hourly** — every source's temperature for the next 48 hours (24 on a phone),
+    starting at the current hour. One plume rather than two, because an hour has a
+    temperature and not a high and a low: band for the spread, a thin line per model,
+    the average bold with labelled rings, the chosen source in green. A table beneath
+    with the same per-column shading as the daily one, a rule and a date at each
+    midnight, and a footnote naming how many sources it actually ran over.
+  - **Daily** — every forecast source's daily high, day by day.
   The chart's headline line is the **average of all sources**, with the full spread as
   a band, every model a thin line and the chosen source drawn alongside in green; the
   overnight low gets the same treatment in blue beneath it. A
@@ -494,6 +504,48 @@ Changing these without understanding why breaks correctness, not just appearance
 - **Year and forecast source sit above the chart.** They decide what is drawn, so
   they belong before it; the rest of the controls (aggregation, zoom, panels) act on
   what is already there and stay beneath. `.controls.topctl` is the top row.
+- **Daily and Hourly are one tab with a switch, not two tabs.** Five top-level tabs
+  already need 356px of the 362px a 390px phone offers; a sixth wraps to a second row.
+  The switch sits in `.controls.topctl` because it decides *what is drawn*, which is
+  the same reason the year and source pickers live there.
+- **Only the view on screen is fetched.** `maybeLoadHourly()` and `maybeLoadAlt()` are
+  separate lazy loads, and the tab handler, the view switch and the cold-load path each
+  pick exactly one. Landing on Hourly must not also pull the daily model set — a cold
+  load is three Open-Meteo calls plus the one that view needs, and that budget is the
+  constraint the whole app is built around.
+- **Two of the thirteen models have no hourly data at all.** KMA and ACCESS-G answer
+  the hourly endpoint with nothing but nulls. They are dropped rather than drawn as a
+  row of dashes — the rule `absorbAlt()` already applies daily — so the hourly
+  comparison honestly runs over fewer sources than the daily one, and the table's
+  footnote prints the count rather than letting a mean over eleven pass as one over
+  fourteen. Do not "fix" this by filling their gaps from another model.
+- **The hourly axis starts at the current hour, not at midnight.** The hours already
+  elapsed today are not a forecast, and including them would put a model's analysis of
+  6am beside its forecast of 6pm in the same row. Forty-eight hours is the desktop
+  window and twenty-four the phone's: past two days the models diverge faster than an
+  hour-by-hour reading is worth, and 48 columns is already the most a table can carry.
+- **The hourly rings go on every nth hour, solved rather than switched off.** The rest
+  of the app drops labelled circles entirely once `spacing >= 2 * radius` fails, which
+  at 48 columns would mean never drawing one. Here the same rule is solved for n —
+  `cstep = ceil(2 * radius / spacing)` — so the signature look survives a dense axis.
+  Verified at both widths: the resulting spacing clears `2 * radius` in each case.
+- **Local wall-clock is the join key between the two hourly sources.** Open-Meteo under
+  `timezone=auto` returns `2026-09-19T14:00` and NWS returns
+  `2026-09-19T14:00:00-05:00`, so NWS is sliced to 13 characters and keyed alike.
+  **`units` already ends with `&timezone=auto`** — appending another one produced a
+  duplicate parameter that Open-Meteo rejected outright, which cost an hour to find
+  because the failure surfaced as a bare "Failed to fetch". Do not add a timezone to a
+  URL that already interpolates `units`.
+- **Changing what a response *keeps* needs a new cache tag, exactly as changing what it
+  *asks for* needs a new key.** The hourly view reads `properties.forecastHourly` from
+  the NWS points response, which the old `keep` threw away. The URL is identical, so
+  the key would have been identical, and every browser holding a month-old entry would
+  have been served a response missing the field. The tag moved from `nwspt` to
+  `nwspt2`, and `nwsPoint()` now serves both the daily and hourly forecasts from one
+  cached lookup.
+- **The year picker is hidden on the Hourly view.** It is always the next two days from
+  now, so leaving the control visible would invite the reading that 2015 shows 2015 —
+  the same reasoning that hides it on the statewide tab.
 - **The Forecast tab does not load the normals.** It is the landing view and the
   normals are a 30-year pull it never reads, so `maybeLoadClim()` is deferred until a
   tab that needs it. A cold landing is three Open-Meteo calls, not four. Verification
