@@ -173,12 +173,12 @@
   .msdot{cursor:pointer}
   .msdot circle{stroke:var(--paper);stroke-width:2.2}
   .msdot:hover circle,.msdot.sel circle{stroke:var(--ink);stroke-width:2.8}
-  .msname{fill:var(--ink-soft);font-size:10.5px}
+  .msname{fill:var(--ink-soft)}
   .msdot.sel .msname{fill:var(--ink)}
   /* A place with no forecast behind it: a smaller, quieter dot and name, so it reads
      as orientation rather than as a station whose number failed to load. */
   .msplace circle{fill:var(--ink-soft);opacity:.55}
-  .msplace text{fill:var(--ink-soft);opacity:.75;font-size:7px}
+  .msplace text{fill:var(--ink-soft);opacity:.75}
   .mslo{fill:var(--ink-soft);font-size:9.5px}
   .msrank text{font-size:12px}
 
@@ -273,7 +273,7 @@
   @media (prefers-reduced-motion:no-preference){.pending{opacity:.55;transition:opacity .4s}}
 
   @media (max-width:720px){
-    body{padding:15px 14px 30px}
+    body{padding:15px 11px 30px}
     .standfirst{font-size:14.5px;margin-bottom:11px}
     /* Five tabs need 356px of the 362 a 390px phone offers — the common iPhone
        width fits on one row, and anything narrower wraps rather than truncating. */
@@ -1834,7 +1834,7 @@ function textW(str,px){
 function drawMsMap(rows,date){
   const M=isMobile();
   const W=M?380:1000;
-  const mapW=M?330:400, mapH=M?400:480, top=M?32:38;
+  const mapW=M?352:400, mapH=M?500:480, top=M?28:38;
   const P=msProject({x:M?(W-mapW)/2:20, y:top, w:mapW, h:mapH});
   const H=top+mapH+(M?16:22);
 
@@ -1859,7 +1859,8 @@ function drawMsMap(rows,date){
   // side puts names straight through neighbouring markers. Each name takes the first
   // of above / below / right / left that clears every marker and every name already
   // placed; the markers all go in as obstacles first so ordering cannot matter.
-  const rr=M?12:11.5, lh=12, pad=1, pr=2.6;
+  const rr=M?13:11.5, pad=1, pr=2.6;
+  const nfs=M?11.5:10.5, pfs=M?8:7, lh=M?13:12;
   const pts=rows.map(r=>({r, x:P.x(r.city.lon), y:P.y(r.city.lat)}));
   const plc=MS_PLACES.filter(c=>!(c.wide&&M)).map(c=>({c, x:P.x(c.lon), y:P.y(c.lat)}));
   const boxes=pts.map(p=>({x1:p.x-rr,y1:p.y-rr,x2:p.x+rr,y2:p.y+rr}))
@@ -1907,8 +1908,8 @@ function drawMsMap(rows,date){
     return true;
   };
   // Stations first: they carry the numbers, so they get the clear ground.
-  pts.forEach(p=>place(p,p.r.city.name,rr,10.5,lh,5));
-  const shown=plc.filter(p=>place(p,p.c.name,pr,7,9,3.5,true));
+  pts.forEach(p=>place(p,p.r.city.name,rr,nfs,lh,5));
+  const shown=plc.filter(p=>place(p,p.c.name,pr,pfs,M?10:9,3.5,true));
 
   // Shields go on last and give way to everything: they are placed against the
   // markers and the city names already down, and a route whose badge cannot find a
@@ -1943,7 +1944,7 @@ function drawMsMap(rows,date){
   const places=shown.map(p=>`<g class="msplace">`
     +`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${pr}"/>`
     +`<text x="${p.lab.x.toFixed(1)}" y="${p.lab.y.toFixed(1)}" `
-    +`text-anchor="${p.lab.a}">${esc(p.c.name)}</text></g>`).join("");
+    +`text-anchor="${p.lab.a}" style="font-size:${pfs}px">${esc(p.c.name)}</text></g>`).join("");
   let s=land+fills+counties+roads+shields+places;
   pts.forEach(p=>{
     const h=p.r.rec.hi;
@@ -1963,7 +1964,7 @@ function drawMsMap(rows,date){
       // attribute loses to `text{fill:var(--ink-soft)}` — see CLAUDE.md.
       +`style="fill:#000;font-variant-numeric:tabular-nums">${n}</text>`
       +`<text class="msname" x="${p.lab.x.toFixed(1)}" y="${p.lab.y.toFixed(1)}" `
-      +`text-anchor="${p.lab.a}">${esc(p.r.city.name)}</text>`
+      +`text-anchor="${p.lab.a}" style="font-size:${nfs}px">${esc(p.r.city.name)}</text>`
       +`</g>`;
   });
 
@@ -2047,8 +2048,8 @@ function drawMs(){
   });
   $("key").innerHTML=`<span>Coolest <i class="tgrad"></i> warmest, among these `
     +`cities on the day shown</span>`
-    +`<span style="color:var(--ink-soft)">Counties and state line from US Census `
-    +`boundaries; routes approximate</span>`;
+    +`<span style="color:var(--ink-soft)">Counties and state line: US Census; `
+    +`routes approximate</span>`;
 
   const deg=M?"":"°";
   const nice=t=>`${WDAYS[new Date(t+"T12:00:00").getDay()]}<span class="mon">`
@@ -2142,7 +2143,7 @@ function drawMs(){
   $("hint2").textContent="Read down a column to find the warmest city that day, "
     +"across a row to see one city's week.";
   $("readout").innerHTML=`<span class="stat">Map: the average high. Table: high and `
-    +`low, all week. Tap either for the breakdown.</span>`;
+    +`low. Tap either for its breakdown.</span>`;
 }
 
 // The breakdown behind one figure. Anchored to the cell and clamped inside the

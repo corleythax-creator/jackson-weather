@@ -311,7 +311,11 @@ Changing these without understanding why breaks correctness, not just appearance
   tappable. The harness asserts a place never renders a second text node — that is
   what a stray temperature would look like.
   The same trap caught the shield font: `.msshield text` sets `font-size`, so the
-  per-badge size has to go on an inline `style`, not a `font-size=` attribute.
+  per-badge size has to go on an inline `style`, not a `font-size=` attribute — and
+  then `.msname` and `.msplace text` for the same reason, once the station and place
+  fonts had to differ between phone and desktop. A size that varies by breakpoint
+  cannot live in a CSS rule that also wins the cascade; the rules now carry colour
+  only and `nfs`/`pfs` go out inline.
 - **Station labels are placed before place labels.** Both go through the same
   collision placer, which takes a radius, a text size, a line height and a gap, but
   the stations carry the numbers so they get the clear ground and a place name gives
@@ -418,6 +422,19 @@ Changing these without understanding why breaks correctness, not just appearance
   of longitude is 0.84 of a degree of latitude, so plotting lon and lat on the same
   scale comes out a third too wide and the state reads as the wrong shape. The scale
   is `min(w/dx, h/dy)` so the aspect ratio survives whatever box it is given.
+- **The phone map is bigger than the desktop one, and the marker radius is the
+  thing that caps it.** A 390px phone was drawing a 330×400 map with 10.5px names
+  — legible at arm's length only just, and leaving a third of the screen to the
+  table below. It is now 352×500 with 11.5px station names and 8px place names,
+  against 400×480 and 10.5/7 on desktop, with the body gutter cut to 11px to pay
+  for the width. The markers grew with it, but only to `rr=13`: 13.5 put Kosciusko's
+  marker through Greenwood's name, which is the clash the harness catches, so 13 is
+  the largest value that is provably clear. The extra room is worth more than it
+  cost — the phone map now places **15** of the 16 places (Starkville came back) and
+  **all 11** shields, where the smaller one dropped Starkville and US 82. Rolling
+  Fork is still absent, which is `wide:1` by design, not a casualty of the scale.
+  Two strings were shortened to buy the same space: the readout under the map and
+  the Census credit in the key.
 - **Map labels are placed against collisions, not at a fixed offset.** Greenville,
   Cleveland, Greenwood and Grenada sit within about fifty pixels of each other, and a
   fixed side put names straight through neighbouring markers. Each name takes the
