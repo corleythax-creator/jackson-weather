@@ -244,6 +244,26 @@ Changing these without understanding why breaks correctness, not just appearance
   point `msSel` already names the cell just clicked — so "close when the click is on
   the selected cell" closed the card on the same click that opened it. The listener
   now ignores `button.msbtn` entirely and the button decides open-or-close itself.
+- **The readout only reserves height on the Timeline.** `min-height` on `.readout`
+  exists so hovering does not shunt the chart up and down under the pointer — but
+  only the Timeline rewrites the readout on hover. On the other four tabs it is a
+  static line, and the floor was reserving 38px of nothing on every one of them.
+  `syncButtons()` puts the `hoverable` class on only when `mode === "chart"`.
+- **Vertical space is budgeted from a measurement, not by eye.** The chart used to
+  start 490px down on desktop and 525px on a phone. Trimming the title, the
+  standfirst, the control padding, the readout floor and the two forecast chart
+  heights — and cutting a standfirst sentence the readout beneath it already said —
+  brought that to 347px and 383px, about 28% off each. The scratch harness prints
+  the top edge of every landmark, so the next trim can be aimed at whatever is
+  actually costing the most rather than guessed at.
+- **Five tabs fit one row at 390px, and that drove the tab metrics.** They need 356px
+  of the 362px a 390px phone offers, at 13.5px with a 6px margin. Anything narrower
+  wraps to two rows, which is the intended graceful failure — do not shorten the
+  labels to chase it.
+- **The Forecast and Verification charts are shorter than they look like they should
+  be.** Adding the overnight low widened the Forecast y range from about 10° to 40°,
+  so most of the panel is empty air between the two plumes; the height came down to
+  match rather than paying full price for the gap.
 - **The map is hand-drawn SVG, like every other chart here.** A tile layer or a
   GeoJSON fetch would mean a dependency, a key or a request, and the single-file rule
   forbids all three. `MS_OUTLINE` is a 42-point boundary traced by hand at roughly
