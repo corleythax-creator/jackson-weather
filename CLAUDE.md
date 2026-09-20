@@ -82,7 +82,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
     the average bold with labelled rings, the chosen source in green. A table beneath
     with the same per-column shading as the daily one, a rule and a date at each
     midnight, and a footnote naming how many sources it actually ran over.
-  - **Daily** — every forecast source's daily high, day by day.
+  - **Daily** — every forecast source's daily high, day by day, with a row of
+    condition glyphs above the plot, the weekday's first letter under every column and
+    Saturday and Sunday tinted green behind the chart.
   The chart's headline line is the **average of all sources**, with the full spread as
   a band, every model a thin line and the chosen source drawn alongside in green; the
   overnight low gets the same treatment in blue beneath it. A
@@ -569,6 +571,40 @@ Changing these without understanding why breaks correctness, not just appearance
   comparison honestly runs over fewer sources than the daily one, and the table's
   footnote prints the count rather than letting a mean over eleven pass as one over
   fourteen. Do not "fix" this by filling their gaps from another model.
+- **Night is shaded from real sunrise and sunset, at fractional hour positions.**
+  `nightSpans()` returns fractional indices, not whole hours: a sunrise at 06:46 falls
+  between two columns and at roughly twenty pixels an hour, snapping it to one would be
+  visibly wrong. `X()` is linear in its argument, so a fraction projects with no extra
+  maths. The band draws *before* the gridlines — it is the ground the chart sits on,
+  not a layer over the data. Which side of the window opens in darkness is decided by
+  the last event before the left edge, or, when there is none, by the first event after
+  it: a sunrise ahead means the window opened in the dark. A window wholly inside one
+  night shades end to end, and one wholly in daylight shades nothing.
+- **Sunrise and sunset ride the plain forecast call, and only that one.** Asked for
+  beside `models=` they come back suffixed per model — thirteen identical copies of the
+  same astronomy, since no model computes it. The main forecast call carries no model
+  list, already spans the hourly window, and is made on every load, so the two fields
+  cost nothing. Adding them changed that URL, which changed its cache key by itself, so
+  no warm browser can be served an entry missing them.
+- **Dates are parsed at midday, never at midnight.** `dayOf()` builds
+  `new Date(t+"T12:00")`. An ISO date at 00:00 can land on the previous day once a
+  daylight-saving shift is applied, which would letter the axis wrong and paint the
+  weekend band on the wrong columns, twice a year.
+- **The weekday letter goes on every column; the date number keeps its cadence.** The
+  date row is thinned to `maxLab` labels, which on a 16-day desktop axis means every
+  other day. A single character is narrow enough to fit where a date is not, and a
+  weekday letter on every *other* day would be worse than none. Weekend letters take
+  the band's own colour so the tint and the letters read as one marking rather than two.
+- **The weekend band is drawn half a step past its outer columns.** Stopping at the
+  column centres would tint half of Saturday and half of Sunday; the band exists to
+  cover those days. Consecutive weekend days are grouped into one rect, and a run that
+  reaches the last column is flushed there — a window ending on a Saturday still gets
+  its band.
+- **The Daily view's glyphs come from `weather_code` already in `byDate`.** No extra
+  request: the forecast call carries the code, and the tab reads it. They obey the same
+  spacing rule as the Timeline's, so a cramped axis drops them rather than overlapping,
+  and they carry the same caveat — NWS publishes no WMO code, so an NWS-driven day keeps
+  Open-Meteo's condition and can disagree with the numbers under it.
 - **The hourly axis starts at the current hour, not at midnight.** The hours already
   elapsed today are not a forecast, and including them would put a model's analysis of
   6am beside its forecast of 6pm in the same row. Forty-eight hours is the desktop

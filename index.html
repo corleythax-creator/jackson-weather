@@ -73,6 +73,13 @@
   .hi{fill:none;stroke:var(--hot);stroke-width:1.2;opacity:.88;stroke-linejoin:round}
   .lo{fill:none;stroke:var(--cold);stroke-width:1.2;opacity:.88;stroke-linejoin:round}
   .cityline{fill:none;stroke-width:1.8;stroke-linejoin:round}
+  /* Night is the ground the hourly chart sits on, so it goes under the gridlines.
+     Darker rather than a colour: the panel already carries two accent hues. */
+  .nightband{fill:#000;opacity:.26}
+  .sunrule{stroke:var(--solar);stroke-width:.9;stroke-dasharray:2 3;opacity:.5}
+  .sunlab{font-size:8.5px}
+  .weekendband{fill:var(--today);opacity:.1}
+  .wdlab{font-size:9.5px}
   .indoorline{fill:none;stroke:var(--indoor);stroke-width:1.3;opacity:.9}
   .soilline{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
   .soilfill{stroke:none;opacity:.3}
@@ -454,7 +461,12 @@ function setYear(y){
 
 const units="&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto";
 const varsA="&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,shortwave_radiation_sum,weather_code";
-const varsF=varsA+",uv_index_max,precipitation_probability_max";
+// Sunrise and sunset ride this call because it carries no `models=`. Asked for
+// beside a model list they come back suffixed per model — thirteen identical copies
+// of the same astronomy — so this is the only request they belong on. Adding them
+// changes the URL, which changes the cache key by itself, so a warm browser refetches
+// once and no stale entry can be served missing the fields.
+const varsF=varsA+",uv_index_max,precipitation_probability_max,sunrise,sunset";
 const archBase="https://archive-api.open-meteo.com/v1/archive";
 // Which forecast drives the chart. NWS is the US default; the rest are the raw
 // national models Open-Meteo exposes, so a forecast that disagrees with whatever
@@ -618,6 +630,12 @@ const isMobile=()=>mq.matches;
 async function grab(u){const r=await fetch(u);if(!r.ok)throw new Error(`${r.status} from ${new URL(u).hostname}`);return r.json();}
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pretty=t=>{const [,m,d]=t.split("-"); return `${+d} ${MONTHS[+m-1]}`;};
+// Parsed at midday, never at midnight: an ISO date at 00:00 can land on the previous
+// day once a daylight-saving shift is applied, which would letter the axis wrong twice
+// a year.
+const dayOf=t=>new Date(t+"T12:00").getDay();
+const isWeekend=t=>{const d=dayOf(t); return d===0||d===6;};
+const WDAY_LETTER="SMTWTFS";
 
 /* ---------- buckets: day / week / month ----------
    Buckets are built over the whole date axis, then filtered to the view. That way a
@@ -752,7 +770,7 @@ async function addCity(lat,lon,label){
   const city={key,label,lat,lon,color:nextColor(),byDate:new Map(),
               climRaw:null,clim:null,histRaw:null,histTried:false,histLoading:false,histErr:null,
               soilBase:null,soil:null,api:null,hvac:null,hvacTried:false,
-              hr:null,hrTried:false,loading:true,id:++seq};
+              hr:null,hrTried:false,sun:null,loading:true,id:++seq};
   cities.push(city);
   await loadCity(city);
   if(cities.includes(city)){
@@ -785,7 +803,10 @@ async function loadCity(city){
   // The real end of observation is the last day it actually returned, not today.
   city.obsEnd=null;
   city.byDate.forEach((r,t)=>{ if(r.src==="archive"&&(!city.obsEnd||t>city.obsEnd)) city.obsEnd=t; });
-  if(res[1]&&res[1].status==="fulfilled") absorb(city,res[1].value,"model");
+  if(res[1]&&res[1].status==="fulfilled"){
+    absorb(city,res[1].value,"model");
+    absorbSun(city,res[1].value);
+  }
   city.alt={}; city.altTried=false;
   city.ver=null; city.verTried=false; city.verErr=null;
 
@@ -894,6 +915,67 @@ async function maybeLoadHourly(city){
   }catch(e){ /* api.weather.gov is US-only; a non-US point simply has no NWS row */ }
   if(cities.includes(city)&&mode==="fc") draw();
 }
+
+// Sunrise and sunset, one pair per local day. Kept off byDate because they are
+// timestamps rather than daily quantities, and because absorb() skips any day whose
+// high or low is missing — which would silently drop the sun with it.
+function absorbSun(city,json){
+  const d=json&&json.daily;
+  if(!d||!d.time||!d.sunrise||!d.sunset) return;
+  const m=new Map();
+  d.time.forEach((t,i)=>{
+    const r=d.sunrise[i], k=d.sunset[i];
+    if(r&&k) m.set(t,{rise:r,set:k});
+  });
+  if(m.size) city.sun=m;
+}
+
+// Night runs from one day's sunset to the next day's sunrise, returned as *fractional*
+// hour indices into the window. Fractional because a sunrise at 06:46 falls between two
+// columns, and at roughly twenty pixels an hour, snapping it to one would be visibly
+// wrong on the chart.
+function nightSpans(sun,hours){
+  if(!sun||hours.length<2) return [];
+  const t0=new Date(hours[0]).getTime(), last=hours.length-1;
+  const fx=s=>(new Date(s).getTime()-t0)/36e5;
+  const evs=[];
+  sun.forEach(v=>{ evs.push({x:fx(v.rise),up:true},{x:fx(v.set),up:false}); });
+  evs.sort((a,b)=>a.x-b.x);
+  // State at the left edge: the most recent event before it decides. With none before
+  // it the first event ahead says the same thing backwards — a sunrise coming up means
+  // the window opened in the dark.
+  const before=evs.filter(e=>e.x<=0);
+  const open=before.length ? !before[before.length-1].up
+           : evs.length   ? evs[0].up
+           : false;
+  const out=[]; let cur=open?0:null;
+  evs.forEach(e=>{
+    if(e.x<=0||e.x>=last) return;
+    if(e.up){ if(cur!=null){ out.push([cur,e.x]); cur=null; } }
+    else if(cur==null) cur=e.x;
+  });
+  if(cur!=null) out.push([cur,last]);
+  return out;
+}
+
+// The sunrises and sunsets that fall inside the window, for the rules drawn on them.
+function sunEvents(sun,hours){
+  if(!sun||hours.length<2) return [];
+  const t0=new Date(hours[0]).getTime(), last=hours.length-1;
+  const out=[];
+  sun.forEach(v=>{
+    [[v.rise,true],[v.set,false]].forEach(([t,up])=>{
+      const x=(new Date(t).getTime()-t0)/36e5;
+      if(x>0&&x<last) out.push({x,up,t});
+    });
+  });
+  return out.sort((a,b)=>a.x-b.x);
+}
+
+const clockLab=t=>{
+  const h=+t.slice(11,13);
+  return `${h%12===0?12:h%12}:${t.slice(14,16)}${h<12?"a":"p"}`;
+};
 
 // Fetched only when a model is actually driving the chart, or when the comparison is
 // asked for. The default is NWS, so a normal load costs nothing extra — that request
@@ -1894,6 +1976,14 @@ function drawFcHourly(){
   const Y=v=>T+BH-(v-y0)/(y1-y0||1)*BH;
 
   let s="";
+  // Night first, so the gridlines and every series draw on top of it. X() is linear in
+  // its argument, so a fractional hour index projects correctly with no extra maths.
+  nightSpans(solo.sun,hours).forEach(([a,b])=>{
+    const x0=X(a), x1=X(b);
+    if(x1-x0<0.5) return;
+    s+=`<rect class="nightband" x="${x0.toFixed(1)}" y="${T}" `
+      +`width="${(x1-x0).toFixed(1)}" height="${BH}"/>`;
+  });
   const step=(y1-y0>40)?10:5;
   for(let v=y0;v<=y1;v+=step)
     s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
@@ -1922,6 +2012,17 @@ function drawFcHourly(){
     const pts=band.map(b=>`${X(b.i).toFixed(1)},${Y(b.avg).toFixed(1)}`);
     if(pts.length>1) s+=`<polyline class="fcpick2" points="${pts.join(" ")}"/>`;
   }
+
+  // Sunrise and sunset over the plume rather than under it: they are the reason the
+  // curve turns, so they have to be readable against it. Labelled, because "which side
+  // of this line is dark" is not obvious from a dashed rule alone.
+  sunEvents(solo.sun,hours).forEach(ev=>{
+    const x=X(ev.x), flip=x>W-R-46;   // keep the label inside the panel at the right edge
+    s+=`<line class="sunrule" x1="${x.toFixed(1)}" y1="${T}" x2="${x.toFixed(1)}" y2="${T+BH}"/>`
+      +`<text class="sunlab" x="${(x+(flip?-3:3)).toFixed(1)}" y="${T+9}" `
+      +`text-anchor="${flip?"end":"start"}" style="fill:var(--solar)">`
+      +`${ev.up?"↑":"↓"}${clockLab(ev.t)}</text>`;
+  });
 
   // A rule and a date at every midnight, so a 48-hour axis reads as two days rather
   // than a run of repeating clock numbers.
@@ -1963,7 +2064,8 @@ function drawFcHourly(){
   $("key").innerHTML=`<span><i style="background:var(--hot)"></i>Average temperature</span>`
     +(pick?`<span><i style="background:var(--today)"></i>${esc(pickName)}, your pick</span>`:``)
     +`<span><i style="background:var(--ink-soft)"></i>Every other source</span>`
-    +`<span><i class="swatch"></i>Full spread</span>`;
+    +`<span><i class="swatch"></i>Full spread</span>`
+    +(solo.sun?`<span><i style="background:var(--solar)"></i>Sunrise / sunset, night shaded</span>`:``);
   $("stand").innerHTML=`<b>${esc(solo.label)}</b> &mdash; the bold line averages `
     +`<b>${rows.length}</b> hourly sources over the next <b>${hours.length}</b> hours, which `
     +`disagree by as much as <b>${worst.toFixed(0)}°F</b> in one hour`
@@ -2021,10 +2123,19 @@ function drawFc(){
   const dates=fcDates(rows);
   if(!dates.length){ say("No forecast days available."); return; }
 
-  const W=M?380:1000, L=M?34:52, R=M?10:16, T=M?28:32, BH=M?200:278;
-  const iw=W-L-R, XLAB=T+BH+20, H=XLAB+(M?14:18);
-  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const W=M?380:1000, L=M?34:52, R=M?10:16, BH=M?200:278;
+  const iw=W-L-R;
   const X=i=>L+(dates.length<2?iw/2:i*iw/(dates.length-1));
+  // A row of condition glyphs above the plot, on the same rule the Timeline uses:
+  // they are drawn only while they have room to sit side by side without touching.
+  const symSize=M?14:16, symTop=M?4:6;
+  const sp=dates.length<2?iw:iw/(dates.length-1);
+  const showSym=sp>=symSize+3;
+  const T=(showSym?symTop+symSize+6:0)+(M?28:32);
+  // XLAB is the date row; the weekday letter sits a line under it, so the panel is
+  // that much taller than it was.
+  const XLAB=T+BH+20, WDLAB=XLAB+(M?12:13), H=WDLAB+(M?8:10);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
 
   let lo=Infinity,hi=-Infinity;
   rows.forEach(r=>dates.forEach(t=>{const v=r.map.get(t); if(!v) return;
@@ -2034,6 +2145,24 @@ function drawFc(){
   const Y=v=>T+BH-(v-y0)/(y1-y0||1)*BH;
 
   let s="";
+  // Saturday and Sunday tinted behind everything. Parsed at midday so a daylight-saving
+  // shift can never move a date onto the wrong weekday, and drawn half a step past the
+  // outer columns so the tint covers them rather than stopping at their centres.
+  {
+    const half=sp/2;
+    let run=null;
+    const flush=end=>{
+      if(run==null) return;
+      const x0=Math.max(L,X(run)-half), x1=Math.min(W-R,X(end)+half);
+      if(x1>x0) s+=`<rect class="weekendband" x="${x0.toFixed(1)}" y="${T}" `
+        +`width="${(x1-x0).toFixed(1)}" height="${BH}"/>`;
+      run=null;
+    };
+    dates.forEach((t,i)=>{
+      if(isWeekend(t)){ if(run==null) run=i; if(i===dates.length-1) flush(i); }
+      else flush(i-1);
+    });
+  }
   const step=(y1-y0>40)?10:5;
   for(let v=y0;v<=y1;v+=step)
     s+=`<line class="gridline" x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}"/>`
@@ -2085,6 +2214,23 @@ function drawFc(){
     if(i%lstep) return;
     s+=`<line class="monthrule" x1="${X(i).toFixed(1)}" y1="${T}" x2="${X(i).toFixed(1)}" y2="${T+BH}"/>`
       +`<text x="${X(i).toFixed(1)}" y="${XLAB}" text-anchor="middle">${+t.slice(8)}</text>`;
+  });
+  // The weekday letter goes on *every* column, not on the date row's cadence: one
+  // character is narrow enough to fit where a date is not, and a letter on every other
+  // day would be worse than none. Weekend letters take the band's colour so the two
+  // read as one marking.
+  dates.forEach((t,i)=>{
+    const we=isWeekend(t);
+    s+=`<text class="wdlab" x="${X(i).toFixed(1)}" y="${WDLAB}" text-anchor="middle"`
+      +(we?` style="fill:var(--today)"`:``)+`>${WDAY_LETTER[dayOf(t)]}</text>`;
+  });
+  // The condition for each day, from the weather_code the forecast feed already
+  // returned — no extra request. NWS days keep Open-Meteo's code, because NWS
+  // publishes none, which is the same mismatch the Timeline's glyphs carry.
+  if(showSym) dates.forEach((t,i)=>{
+    const r=solo.byDate.get(t); if(!r||r.wc==null) return;
+    const kind=WMO_GLYPH.get(r.wc); if(!kind) return;
+    s+=weatherGlyph(kind,X(i),symTop,symSize,!!r.fc);
   });
   {
     const rr=M?10:11.5, sp=dates.length<2?iw:iw/(dates.length-1);
