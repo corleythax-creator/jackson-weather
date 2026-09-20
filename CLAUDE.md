@@ -54,7 +54,7 @@ All keyless. All free tier.
 | Purpose | Endpoint | Notes |
 |---|---|---|
 | Observations | `archive-api.open-meteo.com/v1/archive` | ERA5 reanalysis, ~5-day lag |
-| Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=16` |
+| Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=FC_DAYS` (15) |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving. Both cached — the grid lookup for a month, the periods for half an hour |
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
 | **Hourly comparison** | `api.open-meteo.com/v1/forecast` with `hourly=` + `models=` | every model's hourly temperature in one call, suffixed by model id; on demand |
@@ -173,7 +173,7 @@ Changing these without understanding why breaks correctness, not just appearance
 - **NWS wins the forecast where it has coverage.** Open-Meteo's model blend ran 5–9°F
   hot against NWS for Jackson, which is what a user compares against. `applyNws()`
   overwrites forecast highs, lows and rain chance for the ~7 days NWS publishes;
-  Open-Meteo fills days 8–16. NWS never overwrites an observation.
+  Open-Meteo fills the rest of the horizon. NWS never overwrites an observation.
 - **"Observed" means the archive published it, not that the date is past.** ERA5 runs
   about five days behind, so the archive answers for today with nulls and the forecast
   feed's `past_days` window fills them. `city.obsEnd` is the last date the archive
@@ -547,6 +547,16 @@ Changing these without understanding why breaks correctness, not just appearance
   the number is a distance from the truth, not a temperature.
 - **The verification y axis starts at zero.** Error is a magnitude; a floating
   baseline would make a one-degree gap between two models look like a chasm.
+- **`FC_DAYS` is 15 because the sixteenth day had two sources on it.** Model coverage
+  thins with lead time, and it does not thin evenly. Measured for Brandon on 20 Sep
+  2026: 11 sources through day 4, then 9, 8, 7, 6, and 4 from day 11 — and then the
+  sixteenth day fell to **two**, `best_match` and GFS. An average over two is not the
+  same quantity as an average over eleven, and a "spread" between two sources is noise
+  with a number attached, so that column cost more in false confidence than it paid in
+  reach. Day 15 still carries four. Every request and every horizon interpolates the
+  constant, so moving it is the entire change — and the same measurement is how to
+  decide if it should move again. Re-run it before trimming further: the next honest
+  cut is day 11, where coverage halves from 6 to 4.
 - **The Forecast chart draws the low as a second plume, not a second chart.** Same
   band / thin lines / bold average, in `--cold`, sharing one y range. The low's
   labelled circle is dropped on any day where it would collide with the high's —

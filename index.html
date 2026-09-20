@@ -374,7 +374,14 @@
 </div>
 
 <script>
-const FC_DAYS=16, MAX_CITIES=5, YEAR_MIN=2000;
+// 15, not 16. Measured for Brandon on 20 Sep 2026: the models thin out with lead time
+// — 11 sources through day 4, 9, then 8, 7, 6, and 4 from day 11 — but the sixteenth
+// day fell to **two**, best_match and GFS. An average over two is not the same
+// quantity as an average over eleven, and a spread between two sources is noise, so
+// the column was costing more in false confidence than it paid in reach. Day 15 still
+// carries four. Every request and every horizon interpolates this, so moving it is the
+// whole change.
+const FC_DAYS=15, MAX_CITIES=5, YEAR_MIN=2000;
 // The normals window is the WMO standard 30 years, which is also what NWS and the
 // consumer apps quote — so "vs normal" here matches what you'd read elsewhere. It is
 // deliberately NOT the full record: climate drifts, and averaging 86 years would fold
@@ -3838,8 +3845,9 @@ function renderFcTable(solo,rows,dates){
     +`<tr class="spread"><td>Sources<span class="who">reaching that day</span></td>`
     +stat.map(st=>`<td>${st?st.n:"—"}</td>`).join("")+`</tr>`
     +`</tbody></table></div>`
-    +`<p class="foot">NWS publishes about seven days and NBM sixteen; the global models `
-    +`run to ${FC_DAYS}. A blank cell means that source does not reach that day, which is `
+    +`<p class="foot">NWS publishes about seven days, and the models thin out steadily `
+    +`beyond that — only a few still reach day ${FC_DAYS}. A blank cell means that `
+    +`source does not reach that day, which is `
     +`why the average is taken over a shrinking set — the <b>Sources</b> row says how many. `
     +`Every model arrives in one request, so the whole table costs a single call.</p>`;
   box.hidden=false;
