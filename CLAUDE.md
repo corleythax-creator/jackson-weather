@@ -613,11 +613,20 @@ Changing these without understanding why breaks correctness, not just appearance
 - **The rain chance is printed for every day that has one, zero included.** A blank
   above a glyph has to mean "no figure published", not "nought per cent", or the row
   stops being readable at a glance. Rather than hiding the dry days, the ink is scaled
-  to the number — `0.3 + 0.7 * pop/100`, faint at 0 and full at 100 — so the wet days
-  find the eye without the dry ones being silently dropped. It reads `r.pop`, which the
+  to the number — `0.55 + 0.45 * pop/100` — so the wet days find the eye without the dry
+  ones being silently dropped. **The floor is 0.55, and it was 0.3 first, which was
+  wrong**: a 5% day rendered as a ghost, which is decoration rather than information,
+  and this is a figure somebody asked to be able to read. It reads `r.pop`, which the
   forecast call already carries, so it costs no request; on the ~7 days NWS drives, that
-  value is NWS's own. `"100%"` is wider than the glyph beneath it, so the label rather
-  than the icon is what sets how tight the row can get.
+  value is NWS's own.
+- **The rain chance drops its per-cent sign on a phone, and the label is what sets the
+  row's limit.** `"100%"` is wider than the glyph beneath it, so the text, not the icon,
+  decides how tight the row can get — and it is tight: measured at 390px, `"100%"` is
+  23.3px against 22.4px of column, so two wet days running would collide. Dropping the
+  sign takes it to 15.2px, which leaves 7.2px of clearance with *every* day at 100%.
+  That is the same trade the comparison table makes with the degree sign, and the key
+  names the row either way. Measure this again before changing the font: it was checked
+  with a fifteen-day run of 100% so the widest possible neighbours were adjacent.
 - **The Daily view's glyphs come from `weather_code` already in `byDate`.** No extra
   request: the forecast call carries the code, and the tab reads it. They obey the same
   spacing rule as the Timeline's, so a cramped axis drops them rather than overlapping,
