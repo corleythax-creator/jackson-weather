@@ -2135,9 +2135,14 @@ function drawFc(){
   const X=i=>L+(dates.length<2?iw/2:i*iw/(dates.length-1));
   // A row of condition glyphs above the plot, on the same rule the Timeline uses:
   // they are drawn only while they have room to sit side by side without touching.
-  const symSize=M?14:16, symTop=M?4:6;
+  const symSize=M?14:16;
   const sp=dates.length<2?iw:iw/(dates.length-1);
   const showSym=sp>=symSize+3;
+  // The rain chance sits on its own line above the glyph, so the pair reads as one
+  // unit: how wet, and what it looks like. "100%" is wider than the glyph is, which
+  // is what caps the row rather than the icon.
+  const popFont=M?8:8.5, popBase=M?7:8;
+  const symTop=popBase+3;
   const T=(showSym?symTop+symSize+6:0)+(M?28:32);
   // XLAB is the date row; the weekday letter sits a line under it, so the panel is
   // that much taller than it was.
@@ -2235,7 +2240,19 @@ function drawFc(){
   // returned — no extra request. NWS days keep Open-Meteo's code, because NWS
   // publishes none, which is the same mismatch the Timeline's glyphs carry.
   if(showSym) dates.forEach((t,i)=>{
-    const r=solo.byDate.get(t); if(!r||r.wc==null) return;
+    const r=solo.byDate.get(t); if(!r) return;
+    // The chance is drawn for every day that has one, zero included: a blank has to
+    // mean "no figure published", not "nought per cent", or the row stops being
+    // readable. Instead of hiding the dry days the ink is scaled to the number —
+    // faint at 0, full at 100 — so the wet days find the eye on their own.
+    if(r.pop!=null)
+      // font-size rides the inline style, not an attribute: `text{font-size:12px}` in
+      // the stylesheet beats a presentation attribute exactly the way it beats `fill`.
+      s+=`<text class="poplab" x="${X(i).toFixed(1)}" y="${popBase}" text-anchor="middle" `
+        +`style="font-size:${popFont}px;fill:var(--rain);`
+        +`opacity:${(0.3+0.7*Math.min(1,Math.max(0,r.pop/100))).toFixed(2)}">`
+        +`${Math.round(r.pop)}%</text>`;
+    if(r.wc==null) return;
     const kind=WMO_GLYPH.get(r.wc); if(!kind) return;
     s+=weatherGlyph(kind,X(i),symTop,symSize,!!r.fc);
   });
@@ -2265,6 +2282,8 @@ function drawFc(){
     +(pick?`<span><i style="background:var(--today)"></i>${esc(pickName)}, your pick</span>`:``)
     +`<span><i style="background:var(--ink-soft)"></i>Every other source</span>`
     +`<span><i class="swatch"></i>Full spread</span>`;
+  if(dates.some(t=>{const r=solo.byDate.get(t); return r&&r.pop!=null;}))
+    $("key").innerHTML+=`<span><i style="background:var(--rain)"></i>Rain chance</span>`;
   $("stand").innerHTML=`<b>${esc(solo.label)}</b> &mdash; the bold lines average `
     +`<b>${rows.length}</b> forecast sources over <b>${dates.length}</b> days, which `
     +`disagree by as much as <b>${worst.toFixed(0)}°F</b> on one day`

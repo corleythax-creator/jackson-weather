@@ -610,6 +610,14 @@ Changing these without understanding why breaks correctness, not just appearance
   cover those days. Consecutive weekend days are grouped into one rect, and a run that
   reaches the last column is flushed there — a window ending on a Saturday still gets
   its band.
+- **The rain chance is printed for every day that has one, zero included.** A blank
+  above a glyph has to mean "no figure published", not "nought per cent", or the row
+  stops being readable at a glance. Rather than hiding the dry days, the ink is scaled
+  to the number — `0.3 + 0.7 * pop/100`, faint at 0 and full at 100 — so the wet days
+  find the eye without the dry ones being silently dropped. It reads `r.pop`, which the
+  forecast call already carries, so it costs no request; on the ~7 days NWS drives, that
+  value is NWS's own. `"100%"` is wider than the glyph beneath it, so the label rather
+  than the icon is what sets how tight the row can get.
 - **The Daily view's glyphs come from `weather_code` already in `byDate`.** No extra
   request: the forecast call carries the code, and the tab reads it. They obey the same
   spacing rule as the Timeline's, so a cramped axis drops them rather than overlapping,
@@ -818,6 +826,20 @@ Changing these without understanding why breaks correctness, not just appearance
   right there in the DOM. Only `getComputedStyle(el).fill` shows it, so that is what
   the harness now asserts. The same trap as `.grp` and `.key` with `[hidden]`, one
   layer down.
+- **`font-size` as an attribute loses to the stylesheet too, and ten call sites still
+  do it.** `text{fill:var(--ink-soft);font-size:12px}` at the top of the CSS beats a
+  presentation attribute on *both* properties, and while the `fill` half is documented
+  above, the `font-size` half is live: every `font-size="…"` attribute in the file
+  renders at 12px, whatever the code computed. It is not only cosmetic. The labelled
+  circles size themselves to fit their ring — `f = min(10.5, (2r - 3) / (digits * 0.6))`
+  — and that result is being discarded, so on a **phone** a three-digit temperature
+  measures 20.6px inside a 20px ring and spills out of it; 15 of 30 labels overflowed in
+  a 103°F render at 390px. Desktop fits (20px in a 23px ring), which is why it survived.
+  Brandon clears 100°F most summers and the Hot days tab goes to 110, so the case is
+  reached. Known and unfixed, because correcting it visibly resizes labels on four
+  charts: the ring labels on the Forecast, Hourly, Timeline and Verification charts, the
+  hot-day counts and the fly-out's axis labels. Anything new must put its size in an
+  inline `style`, which `.poplab` and the map's shields and place names already do.
 - **Never let `draw()` touch anything inside `#readout`.** `renderReadout()` replaces
   that subtree. A previous bug put an element there, which `draw()` then threw on after
   the first hover — silently killing the soil button's handler, because the throw
