@@ -2068,7 +2068,7 @@ function drawFcHourly(){
       return `<circle cx="${x.toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${rr}" fill="var(--paper)" `
         +`stroke="${col}" stroke-width="1.4"/>`
         +`<text class="dnode" x="${x.toFixed(1)}" y="${(Y(v)+f*0.35).toFixed(1)}" `
-        +`text-anchor="middle" style="fill:${col}" font-size="${f.toFixed(1)}">${n}</text>`;
+        +`text-anchor="middle" style="font-size:${f.toFixed(1)}px;fill:${col}">${n}</text>`;
     };
     band.forEach(b=>{ if(b.i%cstep===0) s+=node(X(b.i),b.avg,"var(--hot)"); });
   }
@@ -2276,7 +2276,7 @@ function drawFc(){
       return `<circle cx="${x.toFixed(1)}" cy="${Y(v).toFixed(1)}" r="${rr}" fill="var(--paper)" `
         +`stroke="${col}" stroke-width="1.4"/>`
         +`<text class="dnode" x="${x.toFixed(1)}" y="${(Y(v)+f*0.35).toFixed(1)}" `
-        +`text-anchor="middle" style="fill:${col}" font-size="${f.toFixed(1)}">${n}</text>`;
+        +`text-anchor="middle" style="font-size:${f.toFixed(1)}px;fill:${col}">${n}</text>`;
     };
     if(sp>=2*rr) band.forEach(b=>{
       s+=node(X(b.i),b.avg,"var(--hot)");
@@ -2464,11 +2464,11 @@ function drawMsMap(rows,date){
       +`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${rr}" `
       +`fill="${h==null?"var(--rule)":col(h)}"/>`
       +`<text x="${p.x.toFixed(1)}" y="${(p.y+f*0.35).toFixed(1)}" text-anchor="middle" `
-      +`font-size="${f.toFixed(1)}" font-weight="600" `
+      +`font-weight="600" `
       // Black, not a dark grey: measured across the ramp it is the only single colour
       // that clears 4.5:1 on every stop. Inline style, not fill=, because a fill
       // attribute loses to `text{fill:var(--ink-soft)}` — see CLAUDE.md.
-      +`style="fill:#000;font-variant-numeric:tabular-nums">${n}</text>`
+      +`style="font-size:${f.toFixed(1)}px;fill:#000;font-variant-numeric:tabular-nums">${n}</text>`
       +`<text class="msname" x="${p.lab.x.toFixed(1)}" y="${p.lab.y.toFixed(1)}" `
       +`text-anchor="${p.lab.a}" style="font-size:${nfs}px">${esc(p.r.city.name)}</text>`
       +`</g>`;
@@ -2804,7 +2804,7 @@ function drawVer(){
       s+=`<circle cx="${X(b.k).toFixed(1)}" cy="${Y(b.avg).toFixed(1)}" r="${rr}" fill="var(--paper)" `
         +`stroke="var(--hot)" stroke-width="1.4"/>`
         +`<text class="dnode" x="${X(b.k).toFixed(1)}" y="${(Y(b.avg)+f*0.35).toFixed(1)}" `
-        +`text-anchor="middle" style="fill:var(--hot)" font-size="${f.toFixed(1)}">${n}</text>`;
+        +`text-anchor="middle" style="font-size:${f.toFixed(1)}px;fill:var(--hot)">${n}</text>`;
     });
   }
   s+=`<text class="panellabel" x="${L}" y="${T-12}">`
@@ -2944,12 +2944,12 @@ function drawHot(){
         s+=`<rect x="${x.toFixed(1)}" y="${(T+BH-h).toFixed(1)}" width="${bw.toFixed(1)}" `
           +`height="${h.toFixed(1)}" fill="${n===1?"var(--hot)":sr.c.color}"/>`
           +`<text x="${(x+bw/2).toFixed(1)}" y="${(T+BH-h-5).toFixed(1)}" text-anchor="middle" `
-          +`style="fill:var(--ink)" font-size="${M?10:11}">${v.days}</text>`;
+          +`style="font-size:${M?10:11}px;fill:var(--ink)">${v.days}</text>`;
       }
       // A month still in progress is marked, so a low count isn't misread as mild.
       if(v.obs<daysInMonth(m))
         s+=`<text x="${(x+bw/2).toFixed(1)}" y="${(T+BH+11).toFixed(1)}" text-anchor="middle" `
-          +`style="fill:var(--ink-soft)" font-size="9">${v.obs}d</text>`;
+          +`style="font-size:9px;fill:var(--ink-soft)">${v.obs}d</text>`;
     });
     // Outlines go over the bars, not behind: a record year BELOW the viewed year is
     // the interesting case, and behind a solid bar it would be invisible. They carry
@@ -3146,7 +3146,7 @@ function flyChart(rows,now,W,H){
   };
   let s="";
   [hi,lo].forEach(v=>s+=`<text x="${L-5}" y="${(Y(v)+3.5).toFixed(1)}" text-anchor="end" `
-    +`font-size="10">${Math.round(v)}°</text>`);
+    +`style="font-size:10px">${Math.round(v)}°</text>`);
   if(now) [[now.hi,"var(--hot)"],[now.lo,"var(--cold)"]].forEach(([v,c])=>
     s+=`<line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W-R}" y2="${Y(v).toFixed(1)}" `
       +`stroke="${c}" stroke-width="1" stroke-dasharray="3 3" opacity=".75"/>`);
@@ -3161,7 +3161,7 @@ function flyChart(rows,now,W,H){
     else if(end) kept[kept.length-1]=i;         // an end label outranks a decade tick
   });
   kept.forEach(i=>s+=`<text x="${X(i).toFixed(1)}" y="${H-3}" text-anchor="middle" `
-    +`font-size="10">&rsquo;${String(rows[i].year).slice(2)}</text>`);
+    +`style="font-size:10px">&rsquo;${String(rows[i].year).slice(2)}</text>`);
   if(now){
     const x=X(slots-1);
     if(rows.length){
@@ -3173,8 +3173,8 @@ function flyChart(rows,now,W,H){
     s+=bar(x,now,nw,"var(--ink)",now.fc
       ? ` fill-opacity=".3" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 2"`
       : ``,Math.min(2.6,Math.max(1.3,nw*0.4)))
-      +`<text x="${x.toFixed(1)}" y="${H-3}" text-anchor="middle" font-size="10" `
-      +`style="fill:var(--ink)">&rsquo;${String(now.year).slice(2)}</text>`;
+      +`<text x="${x.toFixed(1)}" y="${H-3}" text-anchor="middle" `
+      +`style="font-size:10px;fill:var(--ink)">&rsquo;${String(now.year).slice(2)}</text>`;
   }
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily high and low by year">${s}</svg>`;
 }
@@ -3600,7 +3600,7 @@ function draw(){
                 +`fill="var(--paper)" stroke="${col}" stroke-width="1.4"`
                 +(B[i].allFc?` stroke-dasharray="3 2"`:``)+`/>`
                 +`<text class="dnode" x="${cx.toFixed(1)}" y="${(cy+f*0.35).toFixed(1)}" `
-                +`text-anchor="middle" style="fill:${col}" font-size="${f.toFixed(1)}">${n}</text>`;
+                +`text-anchor="middle" style="font-size:${f.toFixed(1)}px;fill:${col}">${n}</text>`;
             });
           });
         }else{

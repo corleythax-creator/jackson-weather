@@ -850,20 +850,24 @@ Changing these without understanding why breaks correctness, not just appearance
   right there in the DOM. Only `getComputedStyle(el).fill` shows it, so that is what
   the harness now asserts. The same trap as `.grp` and `.key` with `[hidden]`, one
   layer down.
-- **`font-size` as an attribute loses to the stylesheet too, and ten call sites still
-  do it.** `text{fill:var(--ink-soft);font-size:12px}` at the top of the CSS beats a
-  presentation attribute on *both* properties, and while the `fill` half is documented
-  above, the `font-size` half is live: every `font-size="…"` attribute in the file
-  renders at 12px, whatever the code computed. It is not only cosmetic. The labelled
-  circles size themselves to fit their ring — `f = min(10.5, (2r - 3) / (digits * 0.6))`
-  — and that result is being discarded, so on a **phone** a three-digit temperature
-  measures 20.6px inside a 20px ring and spills out of it; 15 of 30 labels overflowed in
-  a 103°F render at 390px. Desktop fits (20px in a 23px ring), which is why it survived.
-  Brandon clears 100°F most summers and the Hot days tab goes to 110, so the case is
-  reached. Known and unfixed, because correcting it visibly resizes labels on four
-  charts: the ring labels on the Forecast, Hourly, Timeline and Verification charts, the
-  hot-day counts and the fly-out's axis labels. Anything new must put its size in an
-  inline `style`, which `.poplab` and the map's shields and place names already do.
+- **`font-size` as an attribute loses to the stylesheet exactly as `fill` does — fixed,
+  and here is what it cost.** `text{fill:var(--ink-soft);font-size:12px}` beats a
+  presentation attribute on *both* properties. The `fill` half is the trap above; the
+  `font-size` half went unnoticed for much longer because it is invisible on a desktop.
+  All ten `font-size="…"` attributes were rendering at 12px whatever the code computed,
+  and it was not merely cosmetic: the labelled circles size themselves to fit their ring
+  — `f = min(10.5, (2r - 3) / (digits * 0.6))` — and that result was being discarded, so
+  on a **phone** a three-digit temperature measured 20.6px inside a 20px ring and spilled
+  out. 15 of 30 labels overflowed in a 103°F render at 390px; desktop fitted (20px in a
+  23px ring), which is why it survived. Brandon clears 100°F most summers and the Hot
+  days tab goes to 110, so the case was reached in normal use.
+  Every size now rides an inline `style`. Measured after, at 390px and 1280px: Forecast,
+  Hourly and Verification rings 10.5px desktop / 9.4px phone, the Timeline's 10.5 / 10,
+  map markers 10.6 / 11.5, hot-day counts 11 / 10 with the observed-day suffix at 9, and
+  all twelve fly-out labels at 10 — **zero overflowing rings anywhere**. The three
+  `fill="var(--ink-soft)"` attributes left in `say()` are no-ops: the CSS paints that
+  same colour, so they neither work nor matter. Anything new puts its size in an inline
+  `style`, which `.poplab` and the map's shields and place names already did.
 - **Never let `draw()` touch anything inside `#readout`.** `renderReadout()` replaces
   that subtree. A previous bug put an element there, which `draw()` then threw on after
   the first hover — silently killing the soil button's handler, because the throw
