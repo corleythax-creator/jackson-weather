@@ -1,4 +1,14 @@
 <meta charset="utf-8">
+<!-- The only files besides index.html, and deliberately so: a favicon cannot be
+     inlined at usable quality. The 180 is 60 KB and the 32 is 3 KB — as a data URI
+     that is ~85 KB of base64 re-parsed on every load, against a third of index.html,
+     for something a browser fetches once and caches. They need no build step.
+     The two are different crops on purpose. At 32px the whole card turns to mud —
+     the chart lines become noise — so the tab icon is the sun and cloud alone, which
+     is the part that survives. The home-screen icon is the full artwork, which reads
+     properly at 180. -->
+<link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Daily weather, 2026</title>
 <style>
@@ -374,14 +384,13 @@
 </div>
 
 <script>
-// 15, not 16. Measured for Brandon on 20 Sep 2026: the models thin out with lead time
-// — 11 sources through day 4, 9, then 8, 7, 6, and 4 from day 11 — but the sixteenth
-// day fell to **two**, best_match and GFS. An average over two is not the same
-// quantity as an average over eleven, and a spread between two sources is noise, so
-// the column was costing more in false confidence than it paid in reach. Day 15 still
-// carries four. Every request and every horizon interpolates this, so moving it is the
-// whole change.
-const FC_DAYS=15, MAX_CITIES=5, YEAR_MIN=2000;
+// 10. Model coverage thins with lead time and does not thin evenly — measured for
+// Brandon on 20 Sep 2026: 11 sources through day 4, then 9, 8, 7, and 6 at day 10,
+// falling to 4 from day 11 and to 2 on day 16. It was 16, then 15 to shed the
+// two-source column; 10 stops it at the last day that still carries six, which is
+// where the average is over a set worth averaging. Every request and every horizon
+// interpolates this, so moving it is the whole change.
+const FC_DAYS=10, MAX_CITIES=5, YEAR_MIN=2000;
 // The normals window is the WMO standard 30 years, which is also what NWS and the
 // consumer apps quote — so "vs normal" here matches what you'd read elsewhere. It is
 // deliberately NOT the full record: climate drifts, and averaging 86 years would fold

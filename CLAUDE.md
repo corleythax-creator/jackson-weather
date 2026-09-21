@@ -8,7 +8,12 @@ One self-contained `index.html` that charts daily weather for any city, 2000 to 
 current year. No build step, no dependencies, no charting library and no framework —
 everything is drawn as hand-built SVG and fetched client-side at runtime.
 
-**There is now exactly one exception, and it is worth knowing before you read further:**
+**There are now exactly two exceptions, and both are worth knowing before you read
+further.** The first is `icon-32.png` and `icon-180.png`, the only files in the repo
+besides `index.html`: a favicon cannot be inlined at usable quality, and ~85 KB of
+base64 re-parsed on every load — a third of `index.html` again — is a bad trade for
+something the browser fetches once and caches. They need no build step, which is the
+rule that actually matters. The second:
 the ecobee thermostat panel reads from a Supabase table rather than from a weather API.
 Not out of preference — ecobee caps a pull at 31 days and keeps only ~15 months, and its
 refresh token rotates on every single use, so a static page can neither accumulate the
@@ -54,7 +59,7 @@ All keyless. All free tier.
 | Purpose | Endpoint | Notes |
 |---|---|---|
 | Observations | `archive-api.open-meteo.com/v1/archive` | ERA5 reanalysis, ~5-day lag |
-| Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=FC_DAYS` (15) |
+| Recent + model forecast | `api.open-meteo.com/v1/forecast` | `past_days=14`, `forecast_days=FC_DAYS` (10) |
 | **US forecast (default)** | `api.weather.gov` | 2 calls: `/points/{lat},{lon}` then the returned forecast URL; fetched every load so it can be compared even when not driving. Both cached — the grid lookup for a month, the periods for half an hour |
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
 | **Hourly comparison** | `api.open-meteo.com/v1/forecast` with `hourly=` + `models=` | every model's hourly temperature in one call, suffixed by model id; on demand |
@@ -547,16 +552,17 @@ Changing these without understanding why breaks correctness, not just appearance
   the number is a distance from the truth, not a temperature.
 - **The verification y axis starts at zero.** Error is a magnitude; a floating
   baseline would make a one-degree gap between two models look like a chasm.
-- **`FC_DAYS` is 15 because the sixteenth day had two sources on it.** Model coverage
-  thins with lead time, and it does not thin evenly. Measured for Brandon on 20 Sep
-  2026: 11 sources through day 4, then 9, 8, 7, 6, and 4 from day 11 — and then the
-  sixteenth day fell to **two**, `best_match` and GFS. An average over two is not the
-  same quantity as an average over eleven, and a "spread" between two sources is noise
-  with a number attached, so that column cost more in false confidence than it paid in
-  reach. Day 15 still carries four. Every request and every horizon interpolates the
-  constant, so moving it is the entire change — and the same measurement is how to
-  decide if it should move again. Re-run it before trimming further: the next honest
-  cut is day 11, where coverage halves from 6 to 4.
+- **`FC_DAYS` is 10, and the number comes from source coverage rather than taste.**
+  Coverage thins with lead time and does not thin evenly. Measured for Brandon on 20
+  Sep 2026: **11** sources through day 4, then 9, 8, 7, and **6 at day 10** — falling
+  to 4 from day 11 and to **2** on day 16. It was 16, then 15 to shed the two-source
+  column, now 10, which stops at the last day still carrying six. An average over two
+  is not the same quantity as an average over eleven, and a "spread" between two
+  sources is noise with a number attached. Every request and every horizon interpolates
+  the constant, so moving it is the entire change — and re-running that measurement is
+  how to decide whether it should move again, because these reach limits shift as
+  providers change their runs. Note this also sets the Timeline's forecast horizon,
+  which is the same `HORIZON`.
 - **The Forecast chart draws the low as a second plume, not a second chart.** Same
   band / thin lines / bold average, in `--cold`, sharing one y range. The low's
   labelled circle is dropped on any day where it would collide with the high's —
@@ -627,6 +633,15 @@ Changing these without understanding why breaks correctness, not just appearance
   That is the same trade the comparison table makes with the degree sign, and the key
   names the row either way. Measure this again before changing the font: it was checked
   with a fifteen-day run of 100% so the widest possible neighbours were adjacent.
+- **The tab icon and the home-screen icon are different crops of the same picture.**
+  At 32px the whole card turns to mud — the chart lines below the cloud become noise —
+  so `icon-32.png` is the sun and cloud alone, the part that survives the downscale,
+  and `icon-180.png` is the full artwork, which reads properly at that size. Both were
+  produced by stepping the 1254px source down in halves rather than in one draw: a
+  single 1254→32 resample samples too few source pixels per destination pixel and
+  aliases badly. iOS applies its own squircle mask over the apple-touch-icon, so the
+  artwork's own rounded corners get clipped a second time; the corners are dark and
+  empty, so nothing is lost, but do not add detail out there.
 - **The Daily view's glyphs come from `weather_code` already in `byDate`.** No extra
   request: the forecast call carries the code, and the tab reads it. They obey the same
   spacing rule as the Timeline's, so a cramped axis drops them rather than overlapping,
