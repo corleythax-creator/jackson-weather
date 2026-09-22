@@ -36,13 +36,13 @@ Open `index.html` in a browser. That is the entire dev loop — no server needed
 install, no watch process.
 
 The Vercel project is connected to this repo, so **pushing to `main` deploys
-production by itself** — no manual deployment step. Confirmed on 19 Sep 2026: the push
-of `3ed7213` produced `dpl_HUPZzuQceESDWiPkeyLTjzmzLgZp`, target production,
-`source: "git"`, with the `jackson-weather-corley.vercel.app` alias attached. A push to
-any other branch gets a preview deployment, and Vercel's bot comments the URL on the PR.
-Confirmed again on 19 Sep 2026: `9d093c9` produced `dpl_GbwVUSsabTktt2ctUhG5hpadXb2z`,
-target production, `source: "git"`, `aliasError: null`, with the
-`jackson-weather-corley.vercel.app` alias attached.
+production by itself** — no manual deployment step. A push to any other branch gets a
+preview deployment, and Vercel's bot comments the URL on the PR. This has held on every
+push so far; most recently `71c9e65` on 22 Sep 2026 produced
+`dpl_HW91bukoTeEgKpdSq9hHakdaMjzd`, target production, `source: "git"`,
+`readyState: READY`, `aliasError: null`, with the `jackson-weather-corley.vercel.app`
+alias attached. Record the latest one here rather than appending a paragraph per
+deploy — the mechanism is what matters, not the history.
 
 **Do not confirm a deploy by fetching the site from an agent session.** The sandbox
 proxies outbound HTTPS and serves a *cached* copy, so the page comes back without the
@@ -64,7 +64,7 @@ All keyless. All free tier.
 | Candidate forecast models | `api.open-meteo.com/v1/forecast` with `models=` | one call returns all 13: NBM, Open-Meteo blend, ECMWF IFS + AIFS, GFS, ICON, GEM, ARPEGE, UKMO, JMA, KMA, CMA, ACCESS-G, each suffixed with its id |
 | **Hourly comparison** | `api.open-meteo.com/v1/forecast` with `hourly=` + `models=` | every model's hourly temperature in one call, suffixed by model id; on demand |
 | Hourly NWS | `api.weather.gov` `/forecast/hourly` | one temperature per hour, 156 of them; shares the cached grid lookup |
-| **Statewide table** | `api.open-meteo.com/v1/forecast`, comma-separated coordinates | 11 cities × 13 models in 3 requests; one object per location, on demand |
+| **Statewide table** | `api.open-meteo.com/v1/forecast`, comma-separated coordinates | 12 cities × 13 models in 3 requests; one object per location, on demand |
 | Statewide NWS | `api.weather.gov` | 2 calls per city, 4 at a time; folded into the same average |
 | **Forecast verification** | `previous-runs-api.open-meteo.com/v1/forecast` | `temperature_2m_max_previous_day1…7` for all 13 models; one call, on demand |
 | City search | `geocoding-api.open-meteo.com/v1/search` | name, admin1, country, lat/lon |
@@ -87,9 +87,10 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
     the average bold with labelled rings, the chosen source in green. A table beneath
     with the same per-column shading as the daily one, a rule and a date at each
     midnight, and a footnote naming how many sources it actually ran over.
-  - **Daily** — every forecast source's daily high, day by day, with a row of
-    condition glyphs above the plot, the weekday's first letter under every column and
-    Saturday and Sunday tinted green behind the chart.
+  - **Daily** — every forecast source's daily high, day by day, out to `FC_DAYS`.
+    Above the plot, a rain chance over a condition glyph for each day; below it, the
+    weekday's first letter under every column, with Saturday and Sunday tinted green
+    behind the chart.
   The chart's headline line is the **average of all sources**, with the full spread as
   a band, every model a thin line and the chosen source drawn alongside in green; the
   overnight low gets the same treatment in blue beneath it. A
@@ -113,8 +114,9 @@ for a personal dashboard; it becomes a licensing question if this ever monetises
   warning (band, thin lines, bold average and bold best), and a table of every model
   × lead 1–7 with the average miss above its signed bias, shaded per column. NWS is
   absent: nothing archives what it said last week.
-- **Timeline tab** — temperature (high/low/mean + 25-year normal band), rainfall,
-  and two optional panels: soil moisture percentile and solar/UV.
+- **Timeline tab** — temperature (high/low/mean + 30-year normal band), rainfall,
+  and three optional panels: soil moisture percentile, solar/UV, and the house's HVAC
+  runtime (home city only — see below).
 - **Day condition symbols** — one glyph per day in a row above the panels, from the
   WMO `weather_code` the feeds already return. Day aggregation only, one city only,
   and only while the glyphs have room. The condition is also named in the readout.
@@ -160,16 +162,18 @@ One `<script>`, no modules. In order:
 4. **Derived series** — normals (`buildClim`), soil percentile (`buildSoil`),
    antecedent precipitation index (`buildApi` / `fitApi`).
 5. **Render** — `draw()` for the timeline, `drawHot()` for the Hot days tab,
-   `drawFc()` for the forecast comparison, `drawVer()` for verification,
-   `drawMs()` for the statewide table,
+   `drawFc()` and `drawFcHourly()` for the two forecast comparisons, `drawVer()` for
+   verification, `drawMs()` for the statewide table (with `drawMsMap()` for the map),
    `renderReadout(i, select)` for the figures above the chart.
 6. **Interaction** — one IIFE at the bottom wires mouse, touch, and all controls.
 
 ### State
 
-`year`, `mode` (`fc` | `ms` | `chart` | `hot` | `ver`), `gran` (`day` | `week` | `month`), `thresh`,
+`year`, `mode` (`fc` | `ms` | `chart` | `hot` | `ver`), `fcView` (`daily` | `hourly`,
+which only `mode === "fc"` reads), `gran` (`day` | `week` | `month`), `thresh`,
 `view` (a date-index range), `selDate`, `activePanel` (mobile), `soilOn`, `solarOn`,
-`cities[]`.
+`hvacOn`, `cities[]`. `fcView` and the forecast source persist per browser in
+`localStorage`; nothing else does.
 
 ## Decisions that are load-bearing
 
@@ -235,11 +239,11 @@ Changing these without understanding why breaks correctness, not just appearance
   a model whose arrays are all null, and `fcRows()` only lists maps with entries, so a
   model with no coverage is absent rather than a row of dashes. Verified by stubbing
   two models to null and watching 14 sources become 12.
-- **Eleven cities are three requests, not eleven.** Open-Meteo takes comma-separated
+- **Twelve cities are three requests, not twelve.** Open-Meteo takes comma-separated
   `latitude`/`longitude` and answers with one object per location, in the order asked.
-  A city-at-a-time loop would have been eleven calls against a free tier that has
+  A city-at-a-time loop would have been twelve calls against a free tier that has
   already collapsed this app once. It goes out in `MS_CHUNK`-city slices rather than
-  one request because a slice that fails costs four cities instead of all eleven —
+  one request because a slice that fails costs four cities instead of all twelve —
   the same reasoning as `HIST_CHUNK` — settled with `allSettled` so partial coverage
   beats none. A single-location response comes back as a bare object rather than an
   array, so `maybeLoadMs()` normalises with `Array.isArray(...) ? ... : [...]`; a
@@ -361,8 +365,8 @@ Changing these without understanding why breaks correctness, not just appearance
 - **Station labels are placed before place labels.** Both go through the same
   collision placer, which takes a radius, a text size, a line height and a gap, but
   the stations carry the numbers so they get the clear ground and a place name gives
-  way. All twelve markers and all five place dots are obstacles before any label is
-  placed, so order within each group cannot change the result.
+  way. All twelve markers and all sixteen place dots are obstacles before any label
+  is placed, so order within each group cannot change the result.
 - **Label widths are measured, not estimated.** `textW()` sizes a name with a cached
   canvas 2D context at the same font, because a px-per-character guess was rejecting
   positions that were in fact clear: at 4.2px/char it made "Starkville" a 48px box
@@ -452,7 +456,7 @@ Changing these without understanding why breaks correctness, not just appearance
   them are a single `<path>` rather than 202 polylines: the same picture, a fraction
   of the DOM, and nothing about them needs to be addressable. They are stroked at
   `rgba(190,214,220,.085)` — texture, not information. Anything more assertive and 82
-  county borders bury the eleven markers that the page is actually about.
+  county borders bury the twelve markers that the page is actually about.
 - **Shields yield to everything and are dropped rather than squeezed.** Roads are
   context, not data, so the badges are placed only after the markers and the city
   names, against the same collision test, trying every interior vertex and the
@@ -481,7 +485,7 @@ Changing these without understanding why breaks correctness, not just appearance
   Cleveland, Greenwood and Grenada sit within about fifty pixels of each other, and a
   fixed side put names straight through neighbouring markers. Each name takes the
   first of above / below / right / left that clears every marker and every name
-  already placed. All eleven markers go in as obstacles *before* any name is placed,
+  already placed. All twelve markers go in as obstacles *before* any name is placed,
   so the order cannot change the outcome, and the strip above the panel reserved for
   the date caption is excluded — Southaven is within a hundredth of a degree of the
   state's northern edge and its name landed on the caption before that rule. The
@@ -756,7 +760,7 @@ Changing these without understanding why breaks correctness, not just appearance
   percentile pool, and the hot-day average. Otherwise an extreme year drags its own
   reference toward itself and looks less extreme than it was.
 - **Normals are smoothed ±7 days, rainfall needs it more than temperature.** Any one
-  calendar date across 25 years is dominated by a few wet years.
+  calendar date across the 30-year window is dominated by a few wet years.
 - **The correlation strip always uses daily values**, whatever `gran` is set to.
   Weekly buckets would wash out the 1–2 day lags it exists to measure.
 - **Hot days excludes forecast days.** A modelled 101°F is not an observation.
@@ -1028,11 +1032,26 @@ grep -o '\$("[a-zA-Z0-9_]*")' index.html | sort -u
 grep -o 'id="[a-zA-Z0-9_]*"' index.html | sort -u
 ```
 
-For anything with a colour on it, read the *painted* value back out of the browser
-(`getComputedStyle(el).fill`) and compute the contrast ratio, rather than trusting the
-markup — an attribute that the cascade throws away looks perfectly correct in the DOM.
+For anything with a colour **or a size** on it, read the *painted* value back out of
+the browser — `getComputedStyle(el).fill`, `.fontSize` — rather than trusting the
+markup. An attribute the cascade throws away looks perfectly correct in the DOM, and
+this has now bitten twice: once on `fill` and once on `font-size`, the second time
+going unnoticed for months because it only showed on a phone. For anything sized to fit
+a container, assert the fit too: `el.getBBox().width` against the space it has to live
+in, with the widest value the data can produce.
 
 For anything computational — bucket coverage, lag detection, hot-day counting, label
 spacing — copy the function into a scratch `.js` file and run it against synthetic data
 with a known answer. Every numeric feature in here was checked that way before shipping,
 and it found real errors.
+
+**These notes drift, and always in the same way: counts.** The city list grew from
+eleven to twelve and the place list from five to sixteen, and both left wrong numbers
+scattered through the prose long after the arrays were right — "eleven markers", "five
+place dots", "11 cities × 13 models". When a constant or a list changes, grep the docs
+for its old value rather than trusting that you caught every mention. The cheap audit is
+to parse the real numbers out of `index.html` — `FC_DAYS`, `MS_CITIES.length`,
+`MS_PLACES.length`, `CLIM_FROM`/`CLIM_TO`, the `HR_HOURS` pair — and assert each appears
+in `CLAUDE.md` and `README.md` where it is quoted. Run the same check over the function
+names in the **Architecture** list and the variables in **State**; both had fallen a
+release behind.
